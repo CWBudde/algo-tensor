@@ -28,7 +28,7 @@ both depend on them. See `README.md` for the contents and `MIGRATION.md` for wha
 - **Provenance.** Every file says where it came from in its header (`From github.com/cwbudde/go-whistle … @ 8926ee3,
 originally github.com/cwbudde/go-pocket-tts … @ 9faba38`) followed by `go-whistle change:` and `algo-tensor change:`
   lines. Add an `algo-tensor change:` line when you change a copied file. F-numbers (F-008, F-038, …), `docs/FINDINGS.md`
-  and `PLAN.md` in comments refer to go-whistle's.
+  and `PLAN.md` in comments refer to go-whistle's; this repository's own [PLAN.md](PLAN.md) lists its open work.
 - **No breaking API changes without a major version.** Both consumers switch by import path only; renaming or changing
   an exported identifier breaks them.
 
