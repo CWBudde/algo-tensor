@@ -21,6 +21,12 @@ excludes = [
     "dist/**",
     "coverage.out",
     "coverage.html",
+
+    # Web demo: dependencies, build output, the lockfile and Go's wasm_exec.js
+    "web/node_modules/**",
+    "web/dist/**",
+    "web/package-lock.json",
+    "web/public/wasm_exec.js",
 ]
 
 # Go formatter - simple and strict
@@ -48,7 +54,7 @@ options = ["-s", "-w"]
 includes = ["*.sh"]
 priority = 1
 
-# Markdown, YAML, JSON formatter
+# Markdown, YAML, JSON formatter, and the web demo's TypeScript, CSS and HTML
 [formatter.prettier]
 command = "prettier"
 options = ["-w"]
@@ -57,4 +63,8 @@ includes = [
     "*.yaml",
     "*.yml",
     "*.json",
+    "web/**/*.ts",
+    "web/**/*.tsx",
+    "web/**/*.css",
+    "web/**/*.html",
 ]

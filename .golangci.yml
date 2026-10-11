@@ -93,6 +93,14 @@ linters:
       - linters: [wrapcheck]
         path: (tensor|ops)/
 
+      # the browser demo: each cmd/demo/<key>_js.go registers its functions
+      # in init, and the errors of tensor, ops and internal/demo already name
+      # their source (cmd/demo's export adds the JavaScript function's name)
+      - linters: [gochecknoinits, wrapcheck]
+        path: cmd/demo/
+      - linters: [wrapcheck]
+        path: internal/demo/
+
 formatters:
   enable:
     - gofmt

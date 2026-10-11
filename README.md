@@ -78,7 +78,26 @@ just ci            # check-formatted + test + lint + check-tidy
 just bench         # all benchmarks
 ```
 
-CI runs `just ci`, `just test-purego` and `just build-wasm` on Linux (amd64).
+CI runs `just ci`, `just test-purego` and `just build-wasm` on Linux (amd64), and in a second job `just lint-wasm`,
+`just build-demo` and `just lint-web` for the web demo.
+
+## Web demo
+
+**Live: <https://cwbudde.github.io/algo-tensor/>**
+
+A browser demo runs the library as WebAssembly: Conv2D image filters, an attention heatmap, a kernel benchmark in a Web
+Worker, and Conv1D/RoPE on signals. In the browser it uses the pure-Go fallbacks on a single thread, so it is slower
+than a native build. `cmd/demo` is the Go side (js/wasm), `internal/demo` its logic, and `web/` the Vite + React +
+shadcn/ui front end. It needs Go and Node.js 22 or newer.
+
+```bash
+just dev-demo     # build demo.wasm, copy wasm_exec.js, start Vite at http://localhost:5173/algo-tensor/
+just build-demo   # the same, then npm ci and the production build into web/dist
+just lint-wasm    # golangci-lint on cmd/demo for js/wasm
+just lint-web     # ESLint and tsc on web/
+```
+
+The `Pages` workflow builds and deploys it on every push to `main`.
 
 ## License
 
