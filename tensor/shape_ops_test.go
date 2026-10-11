@@ -1,5 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/tensor/shape_ops_test.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/shape_ops_test.go @ 9faba38.
+// algo-tensor change: TestNarrowRejectsOverflowingRange, from github.com/MeKo-Christian/go-laya
+// internal/runtime/tensor/robustness_test.go @ 3ad632e.
 
 package tensor
 
@@ -110,8 +112,6 @@ func TestConcatDim1(t *testing.T) {
 
 // TestNarrowRejectsOverflowingRange: Narrow must bound start before it adds
 // length, since start+length can wrap negative and pass a combined check.
-// algo-tensor change: from github.com/MeKo-Christian/go-laya
-// internal/runtime/tensor/robustness_test.go @ 3ad632e.
 func TestNarrowRejectsOverflowingRange(t *testing.T) {
 	x, err := New([]float32{1}, []int64{1})
 	if err != nil {
