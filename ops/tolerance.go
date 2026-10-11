@@ -2,6 +2,7 @@
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/ops/tolerance.go @ 9faba38.
 // go-whistle change: without the layer_norm, mlp and convtranspose1d entries; values unchanged.
 // algo-tensor change: those three entries restored, so the map is go-pocket-tts' again.
+// algo-tensor change: a conv2d entry for Conv2DPlan against Conv2D, conv1d's 2e-4; no other value changes.
 
 package ops
 
@@ -28,6 +29,7 @@ var KernelTolerances = map[string]Tolerance{
 	"attention":       {Abs: 2e-4, Rel: 2e-4},
 	"mlp":             {Abs: 2e-4, Rel: 2e-4},
 	"conv1d":          {Abs: 2e-4, Rel: 2e-4},
+	"conv2d":          {Abs: 2e-4, Rel: 2e-4},
 	"convtranspose1d": {Abs: 2e-4, Rel: 2e-4},
 }
 
