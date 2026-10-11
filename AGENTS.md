@@ -32,6 +32,30 @@ originally github.com/cwbudde/go-pocket-tts … @ 9faba38`) followed by `go-whis
 - **No breaking API changes without a major version.** Both consumers switch by import path only; renaming or changing
   an exported identifier breaks them.
 
+## Web demo
+
+The browser demo (<https://cwbudde.github.io/algo-tensor/>, deployed by `.github/workflows/pages.yml`) has four demos,
+keyed `conv2d`, `attention`, `bench` and `signals`. Each demo lives in its own files:
+
+| file                                      | what                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `cmd/demo/<key>_js.go`                    | js/wasm glue: an `init` that calls `register("<key>", …)`, argument parsing   |
+| `internal/demo/<key>.go`, `<key>_test.go` | the computation, host-tested and linted; identifiers start with the demo name |
+| `web/src/wasm/<key>.ts`                   | TypeScript types and typed wrappers; adds the demo to `AlgoTensorDemos`       |
+| `web/src/demos/<Name>.tsx`                | the tab's React component (`Conv2D`, `Attention`, `Benchmark`, `Signals`)     |
+| `web/src/wasm/bench.worker.ts`            | the bench demo's module worker                                                |
+
+- A demo PR touches only its own files. The shared files (`cmd/demo/main_js.go`, `bridge_js.go`, `doc.go`,
+  `main_other.go`; `internal/demo/convert.go`, `image.go`; `web/src/wasm/loader.ts`, `web/src/App.tsx`, the
+  `web/src/components/ui/` components, the configs) change only in a PR of their own.
+- `web/package.json` and `web/package-lock.json` change only with a reason in the PR; the scaffold installed every
+  dependency the demos need (shadcn/ui components, recharts).
+- Go functions return `{error: "…"}` instead of throwing; the wrappers pass every result through `unwrap` from
+  `loader.ts`, which throws it. `cmd/demo/bridge_js.go` has the argument and typed-array helpers.
+- The `_js.go` files build for `GOOS=js` only: `just lint` skips them, `just lint-wasm` lints them. `web/go.mod` keeps
+  `web/` (and the Go files in `node_modules`) out of the root module's `./...`.
+- New files under `cmd/demo`, `internal/demo` and `web/` are algo-tensor's own and have no provenance header.
+
 ## Commands
 
 ```bash
@@ -43,6 +67,10 @@ just test-amd64        # linux/amd64 tests (AVX2, purego) in Docker
 just lint              # golangci-lint (config in .golangci.yml)
 just fmt               # treefmt (gofumpt, gci, prettier, shfmt)
 just ci                # check-formatted + test + lint + check-tidy
+just dev-demo          # web demo: build demo.wasm, start Vite (http://localhost:5173/algo-tensor/)
+just build-demo        # web demo: production build into web/dist
+just lint-wasm         # golangci-lint on cmd/demo for js/wasm
+just lint-web          # ESLint + tsc -b on web/
 
 go test -v -run TestName ./tensor/...
 ```
