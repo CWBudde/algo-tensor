@@ -1,0 +1,98 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: all
+  disable:
+    - depguard # no import allow/deny lists needed
+    - err113 # sentinel errors too verbose for this codebase
+    - exhaustive # don't require exhaustive switch on enums
+    - exhaustruct # don't require all struct fields populated
+    - exhaustruct_v5 # successor of exhaustruct (golangci-lint >= 2.13)
+    - gochecknoglobals # sync.Pools, worker counts and tables are fine
+    - godox # allow TODO/FIXME comments
+    - gomodguard # deprecated, replaced by gomodguard_v2 (enabled via default: all)
+    - ireturn # allow returning interfaces
+    - lll # long lines acceptable in math-heavy code
+    - mnd # magic numbers acceptable in math-heavy code
+    - musttag # no struct tag enforcement needed
+    - nlreturn # no blank-line-before-return enforcement
+    - nonamedreturns # named returns useful for complex signatures
+    - paralleltest # not enforcing t.Parallel everywhere
+    - sqlclosecheck # no SQL in this project
+    - testpackage # allow white-box tests in same package
+    - varnamelen # short names idiomatic in math/tensor code
+    - wsl # use wsl_v5 instead
+  enable:
+    - wsl_v5
+
+    - revive
+  settings:
+    cyclop:
+      max-complexity: 15
+
+    gosec:
+      excludes:
+        - G115 # int conversions of clamped counts and shapes; excluded in go-whistle and go-pocket-tts too
+
+    funlen:
+      lines: 100
+
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+      disable: [decl]
+    revive:
+      rules:
+        - name: file-length-limit
+          arguments:
+            - max: 1500
+              skip-comments: false
+              skip-blank-lines: false
+
+  exclusions:
+    generated: lax
+    presets: [comments, common-false-positives, legacy, std-error-handling]
+
+    rules:
+      # assembly stubs have empty bodies
+      - linters: [revive]
+        path: .*_(amd64|arm64)\.go
+        text: empty-block
+
+      # test files are more relaxed
+      - linters:
+          - funlen
+          - cyclop
+          - gocognit
+          - maintidx
+          - wrapcheck
+          - dupl
+          - noctx
+          - forcetypeassert
+          - gosec
+          - thelper
+          - usetesting
+          - goconst
+        path: _test\.go
+
+      # unsafe is intentional in SIMD/tensor code
+      - linters: [gosec]
+        path: tensor/.*\.go
+        text: "G103:"
+
+      # wrapcheck too noisy between the two packages (it was off for both
+      # projects' internal/ trees)
+      - linters: [wrapcheck]
+        path: (tensor|ops)/
+
+formatters:
+  enable:
+    - gofmt
