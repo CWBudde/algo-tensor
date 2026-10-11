@@ -2,6 +2,7 @@
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/tensor.go @ 9faba38.
 // algo-tensor change: FromOwned and the checkData it shares with New, from
 // github.com/MeKo-Christian/go-laya internal/runtime/tensor/tensor.go @ 3ad632e.
+// algo-tensor change: Dim, a shape accessor that does not copy.
 
 package tensor
 
@@ -140,6 +141,12 @@ func (t *Tensor) Rank() int {
 	}
 
 	return len(t.shape)
+}
+
+// Dim returns the size of dimension i without copying the shape, as Shape
+// does. It panics if i is outside [0, Rank()), like a slice index.
+func (t *Tensor) Dim(i int) int64 {
+	return t.shape[i]
 }
 
 // Clone returns a deep copy.
