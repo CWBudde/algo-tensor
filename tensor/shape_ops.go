@@ -1,6 +1,8 @@
 // From github.com/cwbudde/go-whistle internal/tensor/shape_ops.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/shape_ops.go @ 9faba38.
 // go-whistle change: the transposeFastPath comment no longer names FlowLM/Mimi.
+// algo-tensor change: Narrow bounds start before it compares length with what is left, from
+// github.com/MeKo-Christian/go-laya internal/runtime/tensor/shape_ops.go @ 3ad632e.
 
 package tensor
 
@@ -20,8 +22,11 @@ func (t *Tensor) Narrow(dim int, start, length int64) (*Tensor, error) {
 		return nil, fmt.Errorf("tensor: narrow: %w", err)
 	}
 
-	if start < 0 || length < 0 || start+length > t.shape[dim] {
-		return nil, fmt.Errorf("tensor: narrow: range [%d:%d] out of bounds for dim %d size %d", start, start+length, dim, t.shape[dim])
+	// Bound start first, then compare length with what is left: start+length
+	// can overflow and pass a combined check.
+	size := t.shape[dim]
+	if start < 0 || start > size || length < 0 || length > size-start {
+		return nil, fmt.Errorf("tensor: narrow: start %d length %d out of bounds for dim %d size %d", start, length, dim, size)
 	}
 
 	outShape := append([]int64(nil), t.shape...)

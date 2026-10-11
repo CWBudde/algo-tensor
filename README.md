@@ -13,7 +13,7 @@ import (
 
 ## What is in it
 
-**`tensor`**: a dense, row-major float32 `Tensor` (`New`, `Zeros`, `Full`, `Reshape`, `Transpose`, `Narrow`, `Gather`,
+**`tensor`**: a dense, row-major float32 `Tensor` (`New`, `FromOwned`, which takes its data over instead of copying it, `Zeros`, `Full`, `Reshape`, `Transpose`, `Narrow`, `Gather`,
 `Concat`, broadcasting `BroadcastAdd`/`BroadcastMul`), the layers `Linear`, `MatMul`, `Softmax` and `LayerNorm`, and
 the slice kernels (AVX2 + FMA is checked at run time; shorter slices and tails run the Go loops):
 

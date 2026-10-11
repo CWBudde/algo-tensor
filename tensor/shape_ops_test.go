@@ -1,9 +1,14 @@
 // From github.com/cwbudde/go-whistle internal/tensor/shape_ops_test.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/shape_ops_test.go @ 9faba38.
+// algo-tensor change: TestNarrowRejectsOverflowingRange, from github.com/MeKo-Christian/go-laya
+// internal/runtime/tensor/robustness_test.go @ 3ad632e.
 
 package tensor
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestNarrow(t *testing.T) {
 	x, _ := New([]float32{1, 2, 3, 4, 5, 6}, []int64{2, 3})
@@ -102,5 +107,35 @@ func TestConcatDim1(t *testing.T) {
 	want := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 	if got := out.Data(); !equalF32(got, want, 0) {
 		t.Fatalf("data = %v, want %v", got, want)
+	}
+}
+
+// TestNarrowRejectsOverflowingRange: Narrow must bound start before it adds
+// length, since start+length can wrap negative and pass a combined check.
+func TestNarrowRejectsOverflowingRange(t *testing.T) {
+	x, err := New([]float32{1}, []int64{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct{ start, length int64 }{
+		{math.MaxInt64, 2},
+		{1, math.MaxInt64},
+		{2, 0},
+	}
+
+	for _, tc := range cases {
+		_, err := x.Narrow(0, tc.start, tc.length)
+		if err == nil {
+			t.Errorf("Narrow(0, %d, %d) on size 1 succeeded; want an error", tc.start, tc.length)
+		}
+	}
+
+	// The full and the empty range at the end stay valid.
+	for _, tc := range []struct{ start, length int64 }{{0, 1}, {1, 0}} {
+		_, err := x.Narrow(0, tc.start, tc.length)
+		if err != nil {
+			t.Errorf("Narrow(0, %d, %d) on size 1: %v", tc.start, tc.length, err)
+		}
 	}
 }
