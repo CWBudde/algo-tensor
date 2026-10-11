@@ -53,6 +53,29 @@ test-wasm:
         (cd "$pkg" && env -i PATH="$PATH" HOME="$HOME" "$exec_wasm" "$dir/$pkg.test" -test.count=1)
     done
 
+# Build the browser demo: cmd/demo as js/wasm into web/public, then the Vite app into web/dist
+build-demo: _demo-wasm
+    npm --prefix web ci
+    npm --prefix web run build
+
+# Serve the browser demo with Vite's dev server (http://localhost:5173/algo-tensor/)
+dev-demo: _demo-wasm
+    npm --prefix web run dev
+
+# Lint the js/wasm-only demo glue in cmd/demo
+lint-wasm:
+    GOOS=js GOARCH=wasm golangci-lint run --timeout=5m ./cmd/demo/...
+
+# Lint and type-check the demo front end (needs web/node_modules, e.g. from just build-demo)
+lint-web:
+    npm --prefix web run lint
+    npm --prefix web run typecheck
+
+# Build cmd/demo as web/public/demo.wasm and copy the Go toolchain's wasm_exec.js next to it
+_demo-wasm:
+    GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w' -o web/public/demo.wasm ./cmd/demo
+    cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" web/public/
+
 # Run the linux/amd64 tests (AVX2 assembly, then purego) in Docker, for arm64 hosts without Rosetta
 test-amd64:
     #!/usr/bin/env bash
@@ -83,4 +106,4 @@ ci: check-formatted test lint check-tidy
 
 # Clean build artifacts
 clean:
-    rm -rf bin coverage.out coverage.html
+    rm -rf bin coverage.out coverage.html web/dist web/public/demo.wasm web/public/wasm_exec.js
