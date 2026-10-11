@@ -5,6 +5,8 @@
 // algo-tensor change: AttentionWithPositions, AttentionNoContext and their helpers restored from
 // go-pocket-tts @ 9faba38; attention4DPositionsKeys also suppresses cyclop and gocognit,
 // as go-whistle's attention4D does.
+// algo-tensor change: attention4D leaves differing leading dimensions to the generic path, which
+// broadcasts them; the generic path rejects a zero q/k depth.
 
 package ops
 
@@ -111,6 +113,12 @@ func attentionGeneric(q, k, v *tensor.Tensor, causal bool, offset int64) (*tenso
 		return nil, fmt.Errorf("ops: attention q/k depth mismatch %d vs %d", d, kShape[len(kShape)-1])
 	}
 
+	// A zero depth would scale by +Inf and give NaN scores that the softmax
+	// takes for masked rows; the 4-D path rejects it too (PR #1 review).
+	if d <= 0 {
+		return nil, fmt.Errorf("ops: attention expects a positive q/k depth, got q=%v k=%v", qShape, kShape)
+	}
+
 	if kShape[len(kShape)-2] != vShape[len(vShape)-2] {
 		return nil, fmt.Errorf("ops: attention key/value sequence mismatch %d vs %d", kShape[len(kShape)-2], vShape[len(vShape)-2])
 	}
@@ -155,8 +163,10 @@ func attention4D(q, k, v *tensor.Tensor, causal bool, offset int64) (*tensor.Ten
 		return nil, true, fmt.Errorf("ops: attention q/k depth mismatch %d vs %d", d, kShape[3])
 	}
 
+	// Leading dimensions that differ go to the generic path, whose MatMul
+	// broadcasts them or reports the mismatch (PR #1 review).
 	if kShape[0] != b || kShape[1] != h || vShape[0] != b || vShape[1] != h {
-		return nil, true, fmt.Errorf("ops: attention batch/head mismatch q=%v k=%v v=%v", qShape, kShape, vShape)
+		return nil, false, nil
 	}
 
 	tk := kShape[2]

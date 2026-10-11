@@ -533,3 +533,72 @@ func TestAttentionWithPositionsRingBufferKeys(t *testing.T) {
 		t.Fatalf("ring-buffer keys: got %v, want %v", got.RawData(), ref)
 	}
 }
+
+// TestAttention4DBroadcast keeps the generic path's broadcasting for 4-D
+// inputs whose leading dimensions differ: q [2,1,T,D] against k/v [1,3,T,D]
+// gives [2,3,T,Dv], each (b, h) the rank-3 attention of its slices (PR #1
+// review). Leading dimensions that do not broadcast are an error.
+func TestAttention4DBroadcast(t *testing.T) {
+	const tq, d = 3, 4
+
+	fill := func(n int, seed float32) []float32 {
+		x := make([]float32, n)
+		for i := range x {
+			x[i] = float32(math.Sin(float64(seed) + float64(i)*0.7))
+		}
+
+		return x
+	}
+
+	qd, kd, vd := fill(2*tq*d, 1), fill(3*tq*d, 2), fill(3*tq*d, 3)
+	q := mustTensorT(t, qd, []int64{2, 1, tq, d})
+	k := mustTensorT(t, kd, []int64{1, 3, tq, d})
+	v := mustTensorT(t, vd, []int64{1, 3, tq, d})
+
+	out, err := Attention(q, k, v, true, 0)
+	if err != nil {
+		t.Fatalf("broadcast attention: %v", err)
+	}
+
+	if got := out.Shape(); len(got) != 4 || got[0] != 2 || got[1] != 3 || got[2] != tq || got[3] != d {
+		t.Fatalf("shape %v, want [2 3 %d %d]", got, tq, d)
+	}
+
+	n := tq * d
+
+	for b := range 2 {
+		for h := range 3 {
+			want, err := Attention(mustTensorT(t, qd[b*n:(b+1)*n], []int64{1, tq, d}),
+				mustTensorT(t, kd[h*n:(h+1)*n], []int64{1, tq, d}),
+				mustTensorT(t, vd[h*n:(h+1)*n], []int64{1, tq, d}), true, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := out.Data()[(b*3+h)*n : (b*3+h+1)*n]
+			if !equalApprox(got, want.Data(), 1e-6) {
+				t.Errorf("(%d, %d): %v, want %v", b, h, got, want.Data())
+			}
+		}
+	}
+
+	_, err = Attention(mustTensorT(t, fill(2*2*tq*d, 6), []int64{2, 2, tq, d}),
+		mustTensorT(t, fill(3*2*tq*d, 7), []int64{3, 2, tq, d}),
+		mustTensorT(t, fill(3*2*tq*d, 8), []int64{3, 2, tq, d}), false, 0)
+	if err == nil {
+		t.Error("batch 2 against 3: no error")
+	}
+}
+
+// TestAttentionZeroDepth rejects a zero q/k depth on the generic path, as
+// the 4-D path does, instead of returning zeros (PR #1 review).
+func TestAttentionZeroDepth(t *testing.T) {
+	q := mustTensorT(t, nil, []int64{1, 1, 0})
+	k := mustTensorT(t, nil, []int64{1, 1, 0})
+	v := mustTensorT(t, []float32{1}, []int64{1, 1, 1})
+
+	_, err := Attention(q, k, v, false, 0)
+	if err == nil || !strings.Contains(err.Error(), "positive q/k depth") {
+		t.Errorf("err = %v, want a positive-depth error", err)
+	}
+}
