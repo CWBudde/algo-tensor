@@ -12,7 +12,11 @@ import (
 // describes, in go-whistle internal/ops @ 8926ee3 and go-pocket-tts
 // internal/runtime/ops @ 9faba38. go-pocket-tts' ConvTranspose1D gives other
 // bits with conv workers on arm64, there as here: its channel split does not
-// keep MatMulTransB's 4-row blocks.
+// keep MatMulTransB's 4-row blocks. goldenTranscribe holds algo-tensor's own
+// hashes for Conv2DPlan, made as tensor/golden_test.go describes for its
+// goldenTranscribe; Conv2DPlan gave the same bits as algo-transcribe nn's
+// Conv2D @ 21ad164 on the same inputs (checked once with a throwaway module
+// on darwin/arm64 and linux/amd64, with and without purego, and on js/wasm).
 func TestGoldenHashes(t *testing.T) {
 	cfg := goldenConfig()
 
@@ -30,6 +34,7 @@ func TestGoldenHashes(t *testing.T) {
 	}{
 		{"go-whistle @ 8926ee3", goldenWhistle, append(commonGoldenCases(), whistleGoldenCases()...)},
 		{"go-pocket-tts @ 9faba38", goldenPocket, append(commonGoldenCases(), pocketGoldenCases()...)},
+		{"algo-tensor, algo-transcribe's kernels @ 21ad164", goldenTranscribe, transcribeGoldenCases()},
 	}
 
 	checked := 0

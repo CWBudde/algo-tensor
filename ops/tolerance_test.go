@@ -2,6 +2,7 @@
 // go-whistle's own, not in go-pocket-tts.
 // algo-tensor change: pins all ten entries, the layer_norm, mlp and
 // convtranspose1d ones included again.
+// algo-tensor change: pins the conv2d entry too, all eleven.
 
 package ops
 
@@ -10,9 +11,10 @@ import (
 	"testing"
 )
 
-// TestKernelTolerancesPinned pins the tolerances copied from go-pocket-tts
-// internal/runtime/ops/tolerance.go @ 9faba38: any change must be a decision
-// recorded with a note (AGENTS.md), not drift.
+// TestKernelTolerancesPinned pins all eleven tolerances: the ten copied from
+// go-pocket-tts internal/runtime/ops/tolerance.go @ 9faba38 and
+// algo-tensor's conv2d. Any change must be a decision recorded with a note
+// (AGENTS.md), not drift.
 func TestKernelTolerancesPinned(t *testing.T) {
 	want := map[string]Tolerance{
 		"matmul":          {Abs: 1e-4, Rel: 1e-4},
@@ -24,6 +26,7 @@ func TestKernelTolerancesPinned(t *testing.T) {
 		"attention":       {Abs: 2e-4, Rel: 2e-4},
 		"mlp":             {Abs: 2e-4, Rel: 2e-4},
 		"conv1d":          {Abs: 2e-4, Rel: 2e-4},
+		"conv2d":          {Abs: 2e-4, Rel: 2e-4},
 		"convtranspose1d": {Abs: 2e-4, Rel: 2e-4},
 	}
 

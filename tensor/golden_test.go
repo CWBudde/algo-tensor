@@ -12,7 +12,11 @@ import "testing"
 // and SetWorkers(4): natively on darwin/arm64, with and without purego, in
 // Docker on linux/amd64 (AVX2+FMA), also with and without purego, and on
 // js/wasm under Node. The kernels both projects have gave the same hashes in
-// both, on every configuration both cover.
+// both, on every configuration both cover. goldenTranscribe holds
+// algo-tensor's own hashes for the kernels taken from algo-transcribe nn @
+// 21ad164 (golden_cases_transcribe_test.go), printed the same way here on
+// every configuration but amd64/avx2: there MatMulTransBBias runs the Go
+// tiles, with the amd64/go bits, until PLAN.md 1.2 gives it AVX2 kernels.
 func TestGoldenHashes(t *testing.T) {
 	cfg := goldenConfig()
 
@@ -27,6 +31,7 @@ func TestGoldenHashes(t *testing.T) {
 	}{
 		{"go-whistle @ 8926ee3", goldenWhistle, append(commonGoldenCases(), whistleGoldenCases()...)},
 		{"go-pocket-tts @ 9faba38", goldenPocket, append(commonGoldenCases(), pocketGoldenCases()...)},
+		{"algo-tensor, algo-transcribe's kernels @ 21ad164", goldenTranscribe, transcribeGoldenCases()},
 	}
 
 	checked := 0

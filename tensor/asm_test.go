@@ -1,5 +1,6 @@
 // From github.com/cwbudde/go-whistle internal/tensor/asm_test.go @ 8926ee3;
 // go-whistle's own, not in go-pocket-tts.
+// algo-tensor change: TestGemmBiasMatchesGeneric for MatMulTransBBias's NEON kernels.
 
 package tensor
 
@@ -10,10 +11,11 @@ import (
 )
 
 // The tests in this file compare each dispatching kernel (dotF32, axpyF32,
-// matMulTransB) with its pure-Go fallback, as AGENTS.md requires for every
-// assembly routine. With the purego build tag, or on an architecture without
-// assembly, both sides are the fallback and the tests pass trivially; on
-// arm64 (NEON) and amd64 with AVX2+FMA they exercise the assembly.
+// matMulTransB, gemmBias) with its pure-Go fallback, as AGENTS.md requires
+// for every assembly routine. With the purego build tag, or on an
+// architecture without assembly, both sides are the fallback and the tests
+// pass trivially; on arm64 (NEON) and amd64 with AVX2+FMA they exercise the
+// assembly (gemmBias has NEON kernels only).
 
 // unitRoundoff is the float32 unit roundoff 2^-24.
 const unitRoundoff = 1.0 / (1 << 24)
@@ -130,6 +132,55 @@ func TestMatMulTransBMatchesGeneric(t *testing.T) {
 					g, w := float64(got[i*ldc+j]), float64(want[i*ldc+j])
 					if bound := 2*float64(k+1)*unitRoundoff*mag + 1e-30; math.Abs(g-w) > bound {
 						t.Fatalf("m=%d n=%d k=%d: c[%d][%d] = %v, generic %v (|diff| %g > %g)", m, n, k, i, j, g, w, math.Abs(g-w), bound)
+					}
+				}
+
+				for g := i*ldc + n; g < (i+1)*ldc; g++ {
+					if got[g] != gemmSentinel {
+						t.Fatalf("m=%d n=%d k=%d: gap c[%d] = %v was overwritten", m, n, k, g, got[g])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestGemmBiasMatchesGeneric compares the dispatching gemmBias (the NEON
+// kernels of gemmBiasSIMD where they apply) with the Go tiles element by
+// element, under the dot-product bound with the bias as one more term, and
+// checks that the gaps between output rows stay untouched.
+func TestGemmBiasMatchesGeneric(t *testing.T) {
+	rng := rand.New(rand.NewPCG(17, 18))
+
+	for _, k := range []int{1, 2, 3, 4, 5, 8, 12, 13, 48, 64, 67, 512, 1031} {
+		for _, mn := range [][2]int{{1, 1}, {1, 4}, {1, 7}, {4, 4}, {5, 9}, {8, 12}, {13, 3}, {6, 70}, {9, 1}, {17, 1}, {8, 32}, {3, 8}} {
+			m, n := mn[0], mn[1]
+			a := randGemmData(rng, m*k)
+			b := randGemmData(rng, n*k)
+			bias := randGemmData(rng, n)
+			ldc := n + 2
+
+			got := make([]float32, m*ldc)
+			want := make([]float32, m*ldc)
+
+			for i := range got {
+				got[i] = gemmSentinel
+				want[i] = gemmSentinel
+			}
+
+			gemmBias(got, ldc, a, b, bias, m, k)
+			gemmBiasTiled(want, ldc, a, b, bias, m, k, gemmBiasTileN)
+
+			for i := range m {
+				for j := range n {
+					mag := math.Abs(float64(bias[j]))
+					for p := range k {
+						mag += math.Abs(float64(a[i*k+p]) * float64(b[j*k+p]))
+					}
+
+					g, w := float64(got[i*ldc+j]), float64(want[i*ldc+j])
+					if bound := 2*float64(k+1)*unitRoundoff*mag + 1e-30; math.Abs(g-w) > bound {
+						t.Fatalf("m=%d n=%d k=%d: c[%d][%d] = %v, Go tiles %v (|diff| %g > %g)", m, n, k, i, j, g, w, math.Abs(g-w), bound)
 					}
 				}
 

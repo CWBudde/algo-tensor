@@ -13,21 +13,27 @@ import (
 
 ## What is in it
 
-**`tensor`**: a dense, row-major float32 `Tensor` (`New`, `FromOwned`, which takes its data over instead of copying it, `Zeros`, `Full`, `Reshape`, `Transpose`, `Narrow`, `Gather`,
+**`tensor`**: a dense, row-major float32 `Tensor` (`New`, `FromOwned`, which takes its data over instead of copying it, `Zeros`, `Full`, `Dim`, a shape accessor that does not copy, `Reshape`, `Transpose`, `Narrow`, `Gather`,
 `Concat`, broadcasting `BroadcastAdd`/`BroadcastMul`), the layers `Linear`, `MatMul`, `Softmax` and `LayerNorm`, and
 the slice kernels (AVX2 + FMA is checked at run time; shorter slices and tails run the Go loops):
 
 | kernel                                 | arm64                        | amd64                       | elsewhere, or `-tags purego` |
 | -------------------------------------- | ---------------------------- | --------------------------- | ---------------------------- |
 | `MatMulTransB` (C = A · Bᵀ, row-major) | NEON, register-blocked 4 × 4 | one `DotProduct` per output | Go                           |
+| `MatMulTransBBias` (C = A · Bᵀ + bias) | NEON 4 × 4 and 8 × 1 tiles¹  | Go tiles                    | Go tiles, 4 × 2 under wasm   |
 | `DotProduct`                           | NEON from 48 values          | AVX2 + FMA from 8 values    | Go, four accumulators        |
 | `Axpy`                                 | NEON from 8 values           | AVX2 + FMA from 8 values    | Go                           |
+
+¹ for k ≥ 4 and n = 1 or a multiple of 4; other shapes take the Go tiles (4 × 4, 8 × 1 for single columns). The kernels
+and `ops.Conv2DPlan` come from [algo-transcribe](https://github.com/CWBudde/algo-transcribe)'s `nn` package @ 21ad164.
 
 **`ops`**: scaled dot-product attention (`Attention` with a causal mask and offset, `CausalMask`, and
 `AttentionWithPositions` with absolute positions, padding keys and a context window), interleaved `RoPE` from cos/sin
 tables, `Conv1D`/`Conv1DLeftPad` (im2col through `MatMulTransB` for groups = 1, a direct loop for grouped and depthwise
 convolutions), `ConvTranspose1D` with right trim and pre-packed kernels, `Conv2D` in NHWC/HWIO with groups and
-`SamePadding`, `MLP`, and the per-kernel parity tolerances `KernelTolerance`.
+`SamePadding`, `Conv2DPlan` (a groups = 1 `Conv2D` set up once for one input shape: packed weights, im2col through
+`MatMulTransBBias`, no allocations per call, `ForwardRows` for any row range), `MLP`, and the per-kernel parity
+tolerances `KernelTolerance`.
 
 ## Consumers
 
@@ -51,9 +57,10 @@ loop) and concurrent ones (several decoder beams) never add more than `Workers()
 
 `Parallel` cuts [0, n) into pieces that start at multiples of `grain`; the pieces depend on n, grain and `Workers()`
 only. `MatMulTransB` splits products of at least 2²⁰ multiply-adds over it in whole 4-row blocks, so its output is the
-same bit for bit for any worker count, and so are `Linear` and `MatMul`. `ops.SetConvWorkers(n)` separately sets the
-goroutines of the convolutions (default sequential); `ConvTranspose1D` on arm64 gives other bits with conv workers than
-without (as in go-pocket-tts).
+same bit for bit for any worker count, and so are `Linear` and `MatMul`; `MatMulTransBBias` does the same in whole
+8-row blocks. `ops.SetConvWorkers(n)` separately sets the goroutines of the convolutions (default sequential;
+`Conv2DPlan` splits its rows over them with the same bits); `ConvTranspose1D` on arm64 gives other bits with conv
+workers than without (as in go-pocket-tts).
 
 ## Build tags
 

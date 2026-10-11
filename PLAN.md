@@ -23,7 +23,7 @@ CNN (1, 8 or 32 output channels), measured on 2026-10-11 on an Apple M5 Pro with
 with the bias fused and the weights packed once, Go tiles that also run fast under js/wasm, and NEON (and soon AVX2)
 assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and go-pocket-tts share one set of kernels.
 
-- [ ] 1.1 `conv2d-plan` — Port algo-transcribe's GEMM and convolution (github.com/cwbudde/algo-transcribe, package
+- [x] 1.1 `conv2d-plan` — Port algo-transcribe's GEMM and convolution (github.com/cwbudde/algo-transcribe, package
       `nn`, main @ 21ad164: `gemm.go`, `gemm_tile.go`, `gemm_tile_wasm.go`, `gemm_arm64.go`, `gemm_arm64.s`,
       `gemm_simd_stub.go`, `neon_fp.h`, `conv.go` and their tests and benchmarks) as two additive APIs, with
       provenance headers (`From github.com/cwbudde/algo-transcribe nn/<file> @ 21ad164` plus `algo-tensor change:`
@@ -59,6 +59,16 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       `Conv2D` shape, recorded with date, CPU and Go version in `ops/PERFORMANCE.md`; also run them under
       `just test-wasm`-style js/wasm and record the result. Update README (kernel table and the `ops` list) and add an
       `Example`.
+      Done: `tensor.MatMulTransBBias` (nn's Go tiles and NEON kernels with an `ldc`; `gemmNEON8x1` stores lane by lane
+      for ldc > 1), `(*Tensor).Dim`, `ops.Conv2DPlan` with nn's 8-position im2col blocks, the sweep, asm-versus-Go,
+      worker and conv-worker bit-identity, 0-alloc and error tests, three `Example`s. `Conv2DPlan` gave nn's `Conv2D`
+      bits @ 21ad164 on 14 shapes (the six basic-pitch layers and eight Go-tile shapes) on arm64 NEON and purego,
+      linux/amd64 AVX2 and purego, and js/wasm; for ldc = n `MatMulTransBBias` gave nn's `gemm` bits on 3,900 shapes.
+      Golden hashes for arm64/neon, arm64/go, amd64/go and wasm/go, none for amd64/avx2 (1.2 adds them); no existing
+      hash changed. One worker on an Apple M5 Pro: the basic-pitch window takes 13.9 ms against 328.9 ms for `Conv2D`
+      (nn: 13.5 ms; the plan is 2–7 % slower per layer, not profiled), 94 ms against 748 ms under js/wasm; go-whistle's
+      stem conv 3.6 ms against 9.6 ms. The plan text named `KernelTolerance("conv2d")`, which did not exist: added as
+      `{2e-4, 2e-4}` (conv1d's), pinned, no other value changed.
 - [ ] 1.2 `matmul-bias-avx2` — Port the amd64 AVX2 + FMA GEMM kernels of algo-transcribe's PLAN 4.2 (package `nn`,
       `gemm_amd64.go` and `gemm_amd64.s`, at the main commit that merged its PR #9) into `MatMulTransBBias`, with
       provenance headers: the run-time `golang.org/x/sys/cpu` check (`HasAVX2 && HasFMA`, read once), no VEX/SSE
