@@ -1,0 +1,10 @@
+# Build artifacts
+bin/
+*.test
+coverage.out
+coverage.html
+*.prof
+
+# ccbatch and agent worktrees
+.worktrees/
+.ccbatch/
