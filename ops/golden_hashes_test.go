@@ -87,3 +87,20 @@ var goldenPocket = map[string]map[string][2]string{
 		"RoPE":                     {"430e19c1a47fa3db", "430e19c1a47fa3db"},
 	},
 }
+
+// goldenTranscribe holds what algo-tensor gave for transcribeGoldenCases,
+// by goldenConfig and case.
+var goldenTranscribe = map[string]map[string][2]string{
+	"amd64/go": {
+		"Conv2DPlan": {"7d15cc619b8323f9", "7d15cc619b8323f9"},
+	},
+	"arm64/go": {
+		"Conv2DPlan": {"172a537a4961ecaf", "172a537a4961ecaf"},
+	},
+	"arm64/neon": {
+		"Conv2DPlan": {"db0a8e530a94167d", "db0a8e530a94167d"},
+	},
+	"wasm/go": {
+		"Conv2DPlan": {"a58c28226e46f241", "a58c28226e46f241"},
+	},
+}
