@@ -84,7 +84,10 @@ export function loadAlgoTensor(): Promise<AlgoTensor> {
 
 async function fetchOk(file: string): Promise<Response> {
   const url = `${import.meta.env.BASE_URL}${file}`;
-  const response = await fetch(url);
+  // demo.wasm and wasm_exec.js have no content hash in their names, and GitHub
+  // Pages caches them for 10 minutes; revalidate so a fresh deploy never runs
+  // its new JS against an old demo.wasm.
+  const response = await fetch(url, { cache: "no-cache" });
   if (!response.ok) {
     throw new Error(`${url}: HTTP ${response.status} ${response.statusText}`);
   }
