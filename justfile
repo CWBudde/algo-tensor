@@ -59,17 +59,21 @@ build-demo: _demo-wasm
     npm --prefix web run build
 
 # Serve the browser demo with Vite's dev server (http://localhost:5173/algo-tensor/)
-dev-demo: _demo-wasm
+dev-demo: _demo-wasm _web-deps
     npm --prefix web run dev
 
 # Lint the js/wasm-only demo glue in cmd/demo
 lint-wasm:
     GOOS=js GOARCH=wasm golangci-lint run --timeout=5m ./cmd/demo/...
 
-# Lint and type-check the demo front end (needs web/node_modules, e.g. from just build-demo)
-lint-web:
+# Lint and type-check the demo front end
+lint-web: _web-deps
     npm --prefix web run lint
     npm --prefix web run typecheck
+
+# Install the locked web dependencies unless web/node_modules exists (build-demo always runs npm ci)
+_web-deps:
+    [ -d web/node_modules ] || npm --prefix web ci
 
 # Build cmd/demo as web/public/demo.wasm and copy the Go toolchain's wasm_exec.js next to it
 _demo-wasm:
