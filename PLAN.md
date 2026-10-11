@@ -40,7 +40,9 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       `SamePadding` gives TensorFlow "same"): it packs the transposed weights once and owns the im2col scratch, and
       has `OutShape() (h, w, c int)`, `MACsPerRow() int`, `Forward(dst, x *tensor.Tensor) error` and
       `ForwardRows(dst, x *tensor.Tensor, r0, r1 int) error` for one NHWC image (`[1, inH, inW, inC]`) into a
-      caller-allocated `[1, outH, outW, outC]` dst, with 0 allocations; a plan is not safe for concurrent use
+      caller-allocated `[1, outH, outW, outC]` dst, with 0 allocations and both shapes checked exactly; since
+      `Shape()` returns a copy, add (3) a nonallocating `(*tensor.Tensor).Dim(i int) int64` accessor (panics on an
+      out-of-range i, like a slice index) and validate through `Rank` and `Dim`; a plan is not safe for concurrent use
       (document it), and it may split rows over the `SetConvWorkers` goroutines (default sequential) because rows are
       independent. Tests: `nn`'s float64-reference sweep for the GEMM (k ∈ {1, 2, 3, 5, 8, 49, 200, 297, 672, 936}, m
       0–17, n 1–9 and 32, a guard element after the output, ldc > n) on every Go tile and the NEON path; an
@@ -48,8 +50,9 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       `ops.Conv2D` within `KernelTolerance("conv2d")` on the groups = 1 golden configurations and on the six
       basic-pitch shapes (input 172×264×8 with kernel 3×39→8 and 5×5→1, 172×264×1 with 7×7→32 at stride (1,3),
       172×88×32 with 7×3→1, 172×264×8 with 5×5→32 at stride (1,3), 172×88×33 with 3×3→1; all "same"); `ForwardRows`
-      in any chunking bit-identical to `Forward`; 0 allocs for `Forward` and `ForwardRows`; errors for bad shapes and
-      groups ≠ 1. Add golden cases and hashes (asm and purego) for both new functions, and check once, with a
+      in any chunking bit-identical to `Forward`; 0 allocs for `Forward` and `ForwardRows`; errors for bad shapes
+      (including ones with the right rank and element count) and groups ≠ 1; `Dim` against `Shape`, with 0 allocs.
+      Add golden cases and hashes (asm and purego) for `MatMulTransBBias` and `Conv2DPlan`, and check once, with a
       throwaway module outside the repository that is not committed, that `Conv2DPlan` gives the same bits as `nn`'s
       `Conv2D` at 21ad164 on the same inputs; state the result in the PR. The existing golden hashes must not change.
       Benchmarks: the six basic-pitch layers for `Conv2DPlan` and `ops.Conv2D` (one worker) and one go-whistle encoder
