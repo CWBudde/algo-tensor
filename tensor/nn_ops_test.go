@@ -83,6 +83,41 @@ func TestMatMulBatchBroadcast(t *testing.T) {
 	}
 }
 
+// TestLinearZeroWidth gives a zero-width input the bias rows instead of a
+// division by zero.
+func TestLinearZeroWidth(t *testing.T) {
+	x, _ := New(nil, []int64{2, 0})
+	w, _ := New(nil, []int64{3, 0})
+	b, _ := New([]float32{0.5, -0.5, 1}, []int64{3})
+
+	out, err := Linear(x, w, b)
+	if err != nil {
+		t.Fatalf("linear: %v", err)
+	}
+
+	if got := out.Shape(); !equalI64(got, []int64{2, 3}) {
+		t.Fatalf("shape = %v, want [2 3]", got)
+	}
+
+	want := []float32{0.5, -0.5, 1, 0.5, -0.5, 1}
+	for i, v := range out.Data() {
+		if v != want[i] {
+			t.Fatalf("out = %v, want %v", out.Data(), want)
+		}
+	}
+
+	out, err = Linear(x, w, nil)
+	if err != nil || len(out.Data()) != 6 {
+		t.Fatalf("without bias: %v, %v", out, err)
+	}
+
+	for _, v := range out.Data() {
+		if v != 0 {
+			t.Fatalf("without bias = %v, want zeros", out.Data())
+		}
+	}
+}
+
 func TestLinear(t *testing.T) {
 	x, _ := New([]float32{1, 2, 3, 4}, []int64{2, 2})
 	w, _ := New([]float32{1, 0, 0, 1, 1, 1}, []int64{3, 2})

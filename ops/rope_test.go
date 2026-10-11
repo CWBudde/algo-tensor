@@ -28,6 +28,27 @@ func TestRoPE(t *testing.T) {
 	}
 }
 
+// TestRoPEEmpty returns an empty sequence or width as it is instead of
+// dividing by zero.
+func TestRoPEEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		x, trig []int64
+	}{
+		{"empty sequence", []int64{1, 0, 2}, []int64{0, 1}},
+		{"zero width", []int64{1, 2, 0}, []int64{2, 0}},
+	} {
+		x := mustTensorT(t, nil, c.x)
+		cos := mustTensorT(t, nil, c.trig)
+		sin := mustTensorT(t, nil, c.trig)
+
+		out, err := RoPE(x, cos, sin, 0)
+		if err != nil || len(out.Data()) != 0 {
+			t.Errorf("%s: %v, %v; want an empty result", c.name, out, err)
+		}
+	}
+}
+
 func TestRoPEErrors(t *testing.T) {
 	x := mustTensorT(t, make([]float32, 4), []int64{1, 2, 2})
 	cos := mustTensorT(t, make([]float32, 2), []int64{2, 1})

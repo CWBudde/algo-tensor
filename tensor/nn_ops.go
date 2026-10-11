@@ -2,6 +2,7 @@
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/nn_ops.go @ 9faba38.
 // go-whistle change: without LayerNorm (Needle 3 norms are ZCRMSNorm); cyclop added to MatMul's nolint.
 // algo-tensor change: LayerNorm restored from go-pocket-tts @ 9faba38, with a cyclop nolint.
+// algo-tensor change: Linear takes the batch from the leading dimensions, so a zero-width input gives the bias rows.
 
 package tensor
 
@@ -308,7 +309,11 @@ func Linear(x, weight, bias *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
-	batch := len(x.data) / int(in)
+	// The batch is the product of the leading dimensions, which also holds
+	// for a zero-width input, whose rows are the bias alone. The shape was
+	// checked when x was made, so the count cannot overflow.
+	batch, _ := shapeElemCount(x.shape[:x.Rank()-1])
+
 	outData := make([]float32, batch*int(out))
 	inI := int(in)
 	outI := int(out)

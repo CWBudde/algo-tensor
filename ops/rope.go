@@ -1,5 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/ops/rope.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/ops/rope.go @ 9faba38.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
+// algo-tensor change: an empty sequence or width returns the empty input instead of dividing by zero.
 
 package ops
 
@@ -76,7 +78,10 @@ func prepareRoPE(x, cos, sin *tensor.Tensor, pos int64) (ropeParams, *tensor.Ten
 	outData := out.RawData()
 	cosData := cos.RawData()
 	sinData := sin.RawData()
-	p.prefix = int64(len(outData)) / (p.seq * p.dim)
+
+	if p.seq > 0 && p.dim > 0 { // an empty sequence or width rotates nothing
+		p.prefix = int64(len(outData)) / (p.seq * p.dim)
+	}
 
 	return p, out, outData, cosData, sinData, nil
 }
