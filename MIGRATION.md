@@ -38,7 +38,7 @@ git grep -lz -e '"github.com/cwbudde/go-whistle/internal/tensor"' -e '"github.co
   xargs -0 perl -pi -e '
     s|"github.com/cwbudde/go-whistle/internal/tensor"|"github.com/cwbudde/algo-tensor/tensor"|;
     s|"github.com/cwbudde/go-whistle/internal/ops"|"github.com/cwbudde/algo-tensor/ops"|'
-GOPRIVATE=github.com/cwbudde/algo-tensor go get github.com/cwbudde/algo-tensor@v0.1.0
+go get github.com/cwbudde/algo-tensor@v0.1.0
 go mod tidy
 just fmt # gci moves the imports from the module's own group to the third-party group
 ```
@@ -53,9 +53,6 @@ Afterwards, by hand:
   stays correct: the module has the same `purego` tag and CPU checks.
 - `docs/FINDINGS.md` and `PLAN.md` name `internal/tensor` and `internal/ops`; the module's comments keep pointing to
   go-whistle's F-numbers.
-- algo-tensor is private: go-whistle's CI needs `GOPRIVATE=github.com/cwbudde/algo-tensor` and a token that can read
-  the repository, for example
-  `git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf https://github.com/`.
 
 ## go-pocket-tts
 
@@ -128,9 +125,6 @@ Afterwards, by hand:
   rule have nothing left to match.
 - `justfile` (line 34) runs `./internal/runtime/tensor/` under `qemu-aarch64-static`; the arm64 assembly now lives in
   algo-tensor, whose `go test ./...` runs it on Apple silicon.
-- **Visibility.** go-pocket-tts is public and algo-tensor is private, so `go get github.com/cwbudde/go-pocket-tts`
-  would fail for everyone without access. go-pocket-tts can switch only once algo-tensor is public (or it keeps its
-  copy until then).
 
 ## Both in one binary
 
