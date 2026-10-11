@@ -1,3 +1,9 @@
+// algo-tensor's own, written for PLAN 1.1: golden cases for MatMulTransBBias,
+// whose kernels come from github.com/cwbudde/algo-transcribe nn/gemm*.go @
+// 21ad164. The cases are not copied from there; their outputs were checked
+// once to be bit-identical to nn's unexported gemm at that commit on NEON,
+// purego and js/wasm (with a throwaway module, PR #6).
+
 package tensor
 
 import (
