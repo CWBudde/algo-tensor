@@ -1,5 +1,6 @@
 // From github.com/cwbudde/go-whistle internal/ops/conv2d_test.go @ 8926ee3;
 // go-whistle's own, not in go-pocket-tts.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
 
 package ops
 

@@ -1,6 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/ops/conv1d_test.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/ops/conv1d_test.go @ 9faba38.
 // go-whistle change: one comment no longer names SEANet.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
 
 package ops
 

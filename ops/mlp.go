@@ -1,5 +1,6 @@
 // From github.com/cwbudde/go-pocket-tts internal/runtime/ops/mlp.go @ 9faba38;
 // go-whistle dropped it.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
 
 package ops
 

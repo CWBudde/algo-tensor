@@ -1,6 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/ops/conv1d.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/ops/conv1d.go @ 9faba38.
 // go-whistle change: the convTileFloats comment no longer names SEANet; a cyclop nolint on prepareConv1D.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
 
 package ops
 

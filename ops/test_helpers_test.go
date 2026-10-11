@@ -1,5 +1,6 @@
 // From github.com/cwbudde/go-whistle internal/ops/test_helpers_test.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/ops/test_helpers_test.go @ 9faba38.
+// algo-tensor change: the tensor import is github.com/cwbudde/algo-tensor/tensor.
 
 package ops
 
