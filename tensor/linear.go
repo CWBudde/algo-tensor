@@ -14,8 +14,8 @@ package tensor
 // in a P-core's 1.25 MiB L2 next to the x rows (i7-1255U).
 const linearPanelFloats = 1 << 16
 
-// linearPanelMaxRows caps a panel of short rows: from about 128 values per
-// row on, a longer panel saves nothing more.
+// linearPanelMaxRows caps the panel of rows shorter than 128 values, which
+// the budget alone would make thousands of rows long.
 const linearPanelMaxRows = 512
 
 // linearGroup is the number of tokens the amd64 kernel runs over one weight

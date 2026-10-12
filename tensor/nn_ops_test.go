@@ -2,6 +2,7 @@
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/nn_ops_test.go @ 9faba38.
 // go-whistle change: without the LayerNorm test and benchmark.
 // algo-tensor change: both restored from go-pocket-tts @ 9faba38.
+// algo-tensor change: BenchmarkLinearLaya at go-laya's shapes.
 
 package tensor
 
@@ -170,6 +171,48 @@ func BenchmarkLinear(b *testing.B) {
 				_, _ = Linear(x, w, bias)
 			}
 		})
+	}
+}
+
+// BenchmarkLinearLaya runs Linear at go-laya's shapes (Backlog B.20): x
+// [512, in] by weight [out, in], no bias, as in ModernBERT and mmBERT
+// (1152 → 768 is mmBERT-base's MLP Wo), and one batch-1 product; on one
+// worker and on the default count.
+func BenchmarkLinearLaya(b *testing.B) {
+	shapes := [][3]int64{ // batch, in, out
+		{512, 1024, 3072},
+		{512, 1024, 5248},
+		{512, 2624, 1024},
+		{512, 1024, 1024},
+		{512, 768, 2304},
+		{512, 1152, 768},
+		{512, 768, 768},
+		{1, 1024, 3072},
+	}
+
+	rng := rand.New(rand.NewPCG(42, 1))
+
+	for _, s := range shapes {
+		x := randTensor(rng, s[0], s[1])
+		w := randTensor(rng, s[2], s[1])
+
+		for _, n := range []int{1, 0} {
+			name := fmt.Sprintf("b=%d_in=%d_out=%d/workers=%d", s[0], s[1], s[2], n)
+			if n == 0 {
+				name = fmt.Sprintf("b=%d_in=%d_out=%d/workers=default", s[0], s[1], s[2])
+			}
+
+			b.Run(name, func(b *testing.B) {
+				prev := workers.Load()
+				defer workers.Store(prev)
+
+				workers.Store(int32(n))
+
+				for range b.N {
+					_, _ = Linear(x, w, nil)
+				}
+			})
+		}
 	}
 }
 
