@@ -11,7 +11,7 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.1                       (done)
 → release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe then drops its own
   kernels (its PLAN 5.1)
-1.2                       (after algo-transcribe PR #9, its PLAN 4.2, merges)
+1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332)
 1.3                       (done, after v0.2.0; a numerics change)
 → release v0.3.0
 1.4                       (after 1.2; a numerics change)
@@ -72,7 +72,7 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       (nn: 13.5 ms; the plan is 2–7 % slower per layer, not profiled), 94 ms against 748 ms under js/wasm; go-whistle's
       stem conv 3.6 ms against 9.6 ms. The plan text named `KernelTolerance("conv2d")`, which did not exist: added as
       `{2e-4, 2e-4}` (conv1d's), pinned, no other value changed.
-- [ ] 1.2 `matmul-bias-avx2` — Port the amd64 AVX2 + FMA GEMM kernels of algo-transcribe's PLAN 4.2 (package `nn`,
+- [x] 1.2 `matmul-bias-avx2` — Port the amd64 AVX2 + FMA GEMM kernels of algo-transcribe's PLAN 4.2 (package `nn`,
       `gemm_amd64.go` and `gemm_amd64.s`, at the main commit that merged its PR #9) into `MatMulTransBBias`, with
       provenance headers: the run-time `golang.org/x/sys/cpu` check (`HasAVX2 && HasFMA`, read once), no VEX/SSE
       mixing and `VZEROUPPER` before every return, and the Go tiles as the fallback (tags
@@ -82,6 +82,22 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       the AVX2 kernel was not selected; `just test-amd64` passes. Benchmarks on linux/amd64 next to 1.1's in
       `ops/PERFORMANCE.md` (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all
       there is). Update the README kernel table. Existing golden hashes must not change.
+      Done: nn's `gemmAVX2N4` (2×4, 1×4) and `gemmAVX2N1` (8×1, 1×1) @ 58c8332 with an `ldc` (N4 keeps its channel
+      offset in elements and bounds it by n in memory, to free R11 for ldc·4; N1 stores lane by lane for ldc > 1),
+      chosen once by `HasAVX2 && HasFMA` for the NEON shapes (k ≥ 4, n = 1 or a multiple of 4); the direct-kernel,
+      stride, NaN-past-the-end and `TestGemmAVX2Selected` tests (it also fails under CI on a runner without the
+      features, as nn's does; checked with `GODEBUG=cpu.avx2=off`); `just test-amd64` passes. Golden hashes for
+      amd64/avx2 (`MatMulTransBBias`, `Conv2DPlan`); no existing hash changed. Throwaway check: on all 4,704 AVX2 shapes
+      of a 9,996-shape sweep (ldc = n and n+3, 1 and 4 workers) and the six basic-pitch layers the bits are nn @
+      58c8332's. Found: in the same PR nn switched amd64's Go tile to 4×2 (1.6–1.8× on its Xeon without AVX2); not
+      ported, because it moves the amd64/go hashes, so on 1,099 declined shapes (n ∈ {2, 3, 6, 7}, m mod 8 ≥ 4, at most 8
+      outputs, |Δ| ≤ 3.2 × 10⁻⁵) the bits are nn @ 21ad164's, not 58c8332's: golden `MatMulTransBBias/13x6x7` and the
+      7-channel configuration of `Conv2DPlan`. Against the Go tiles that amd64 with AVX2 ran before (v0.2.0), the golden
+      cases move by at most 1.9 × 10⁻⁵ (`MatMulTransBBias`) and 2.5 × 10⁻⁵ (`Conv2DPlan`), so it belongs in a minor
+      release (v0.3.0, not tagged yet). Only under Docker's x86 emulation (Rosetta), not real x86: the basic-pitch window
+      35.4 ms with AVX2 against 201.3 ms with the Go tiles (nn: 35.2 and 98.9 ms with its 4×2 tile), the GEMMs 5.2–8.3×;
+      the routing sweep now favours the plan on 21 of the 24 routed shapes. Gaps: the 4×2 amd64 tile (a numerics change
+      of its own), and routing `Conv2D` on amd64, which still needs a real x86 measurement.
 - [x] 1.3 `route-existing-ops` — A numerics change, after v0.2.0: route `ops.Conv2D` with groups = 1 through
       `Conv2DPlan`'s im2col and `MatMulTransBBias` path (still allocating its output, as today), and give
       `tensor.MatMulTransB` on amd64 a register-blocked AVX2 + FMA kernel in place of one `DotProduct` per output
