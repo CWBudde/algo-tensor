@@ -39,14 +39,16 @@ on: every output has the bits of one `DotProduct`, as before. Fewer rows of A (a
 ⁴ on darwin/arm64 CPUs with SME2 (Apple M4 and later), for products with k ≥ 4, n a multiple of 4, at least 16 rows, 16
 columns and 2¹⁵ multiply-adds: an SME2 kernel (16 × 16 blocks over the four ZA tiles) that gives every output the NEON
 kernel's bits, 4.4–7.6× as fast on one worker (`ops/PERFORMANCE.md`). Smaller products, GEMVs and other systems run NEON.
+`ops.Conv2DPlan` runs deep layers (k ≥ 32 and enough out channels, at least 1024 output positions) on the same kernel
+with its weights packed once, with the same bits: basic-pitch's window 1.36× as fast.
 
 **`ops`**: scaled dot-product attention (`Attention` with a causal mask and offset, `CausalMask`, and
 `AttentionWithPositions` with absolute positions, padding keys and a context window), interleaved `RoPE` from cos/sin
 tables, `Conv1D`/`Conv1DLeftPad` (im2col through `MatMulTransB` for groups = 1, a direct loop for grouped and depthwise
 convolutions), `ConvTranspose1D` with right trim and pre-packed kernels, `Conv2D` in NHWC/HWIO with groups and
 `SamePadding`, `Conv2DPlan` (a groups = 1 `Conv2D` set up once for one input shape: packed weights, im2col through
-`MatMulTransBBias`, no allocations per call, `ForwardRows` for any row range), `MLP`, and the per-kernel parity
-tolerances `KernelTolerance`.
+`MatMulTransBBias` or, on SME2, its SME2 kernel, no allocations per call, `ForwardRows` for any row range), `MLP`, and the
+per-kernel parity tolerances `KernelTolerance`.
 
 ## Consumers
 

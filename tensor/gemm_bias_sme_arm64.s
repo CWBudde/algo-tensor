@@ -2,6 +2,8 @@
 
 // algo-tensor's own, not in go-whistle or go-pocket-tts: an SME2 kernel for
 // MatMulTransBBias that gives every output gemmNEON4x4's bits (PLAN.md 2.1).
+// algo-tensor change: four rows reduced at once; a prepacked inner operand
+// for ops.Conv2DPlan (PLAN.md 2.2).
 
 // SME2 GEMM kernel for MatMulTransBBias on Apple M4 and later (streaming
 // vector length 512 bits: 16 float32 lanes, four 16×16 float32 ZA tiles).
@@ -26,19 +28,24 @@
 //     fma(+0, +0, acc) as the masked NEON lanes do.
 //  3. The four tiles are reduced as REDUCE4's FADDP tree does,
 //     ((t0 + t1) + (t2 + t3)) + bias, and stored into c with stride ldc,
-//     predicated to the block's columns and rows.
+//     predicated to the block's columns and rows. Four rows go at once, each
+//     tile's four slices moved by one SME2 MOVA and the rows' sums
+//     interleaved: the SME unit waits out each instruction's latency, and
+//     one row at a time, the reduction took most of a block's time for
+//     small k (9 to 64).
 //
 // NaNs. FMOPA, like every instruction that accumulates into ZA, behaves as
 // if FPCR.DN were set: a NaN it produces is the default NaN, where FMLA
 // passes on the payload and sign of a NaN operand. Outputs that are not
-// NaN have gemmNEON4x4's bits. z28 collects 0·output over all outputs,
-// which is NaN for a NaN or infinite one; the kernel tests it once at the
-// end and reports whether it found one, and the caller then computes the
-// outputs again with gemmNEON4x4. The collector costs 4-7 %; a test per
+// NaN have gemmNEON4x4's bits. z28 collects 0·output over all outputs
+// (z16-z19, one per row of the four-row reduction, are added to it at the
+// end), which is NaN for a NaN or infinite one; the kernel tests it once at
+// the end and reports whether it found one, and the caller then computes
+// the outputs again with gemmNEON4x4. The collector costs 4-7 %; a test per
 // block, or per row, made the canary checks wait for the chain of FMLAs
-// into z28 and cost 30-40 %. A signal also clears lanes of z28, but every
-// signal fails the next canary check, here or once more at the end, and
-// after a failed check the caller looks for NaN outputs itself.
+// into z28 and cost 30-40 %. A signal also clears lanes of the collectors,
+// but every signal fails the next canary check, here or once more at the
+// end, and after a failed check the caller looks for NaN outputs itself.
 //
 // Signals. When a signal handler returns to a thread in streaming mode,
 // Darwin zeroes lanes 4-15 of every Z register; ZA, the P registers and the
@@ -76,12 +83,14 @@
 #define PTEST_P5    WORD $0x2550c0a0 // ptest p0, p5.b (Z clear: an output was NaN or infinite)
 
 // Test hook (smeClobberK, smeClobberR): zero lane 7 of the canary and the
-// NaN collector z28, as a signal zeroes lanes 4-15 of both.
+// NaN collectors z28 and z16-z19, as a signal zeroes lanes 4-15 of all of
+// them.
 #define CLOBBER \
 	WORD $0x04a1401d; /* index z29.s, #0, #1 */ \
 	WORD $0x258783a3; /* cmpeq p3.s, p0/z, z29.s, #7 */ \
 	WORD $0x0593401f; /* mov z31.s, p3/m, #0 */ \
-	ZERO_Z28
+	ZERO_Z28; \
+	ZERO_Z16_19
 
 // Packing.
 #define WHILELT_P1_X13_X7  WORD $0x25a715a1 // whilelt p1.s, x13, x7
@@ -113,14 +122,65 @@
 	WORD $0xe540e9a0; /* st1w {z0.s}, p2, [x13] */ \
 	WORD $0x65bb081c  /* fmla z28.s, p2/m, z0.s, z27.s: z28 += 0·output, NaN for a NaN or infinite output */
 
-// func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, clobberK, clobberR int) (redos, done, nan int)
+// Four rows at once (rows w12..w12+3, PLAN.md 2.2): the four tiles' slices
+// in z0-z3, z4-z7, z8-z11 and z12-z15 by one move each, the same sums as
+// REDUCE_ROW per row, interleaved, so that the rows' chains overlap.
+#define REDUCE4_ROWS \
+	WORD $0xc0860400; /* mov {z0.s-z3.s}, za0h.s[w12, 0:3] */ \
+	WORD $0xc0860424; /* mov {z4.s-z7.s}, za1h.s[w12, 0:3] */ \
+	WORD $0xc0860448; /* mov {z8.s-z11.s}, za2h.s[w12, 0:3] */ \
+	WORD $0xc086046c; /* mov {z12.s-z15.s}, za3h.s[w12, 0:3] */ \
+	WORD $0x65840000; /* fadd z0.s, z0.s, z4.s */ \
+	WORD $0x65850021; /* fadd z1.s, z1.s, z5.s */ \
+	WORD $0x65860042; /* fadd z2.s, z2.s, z6.s */ \
+	WORD $0x65870063; /* fadd z3.s, z3.s, z7.s */ \
+	WORD $0x658c0108; /* fadd z8.s, z8.s, z12.s */ \
+	WORD $0x658d0129; /* fadd z9.s, z9.s, z13.s */ \
+	WORD $0x658e014a; /* fadd z10.s, z10.s, z14.s */ \
+	WORD $0x658f016b; /* fadd z11.s, z11.s, z15.s */ \
+	WORD $0x65880000; /* fadd z0.s, z0.s, z8.s */ \
+	WORD $0x65890021; /* fadd z1.s, z1.s, z9.s */ \
+	WORD $0x658a0042; /* fadd z2.s, z2.s, z10.s */ \
+	WORD $0x658b0063; /* fadd z3.s, z3.s, z11.s */ \
+	WORD $0x659e0000; /* fadd z0.s, z0.s, z30.s */ \
+	WORD $0x659e0021; /* fadd z1.s, z1.s, z30.s */ \
+	WORD $0x659e0042; /* fadd z2.s, z2.s, z30.s */ \
+	WORD $0x659e0063  /* fadd z3.s, z3.s, z30.s */
+#define STORE4 \
+	WORD $0xe540e9a0; /* st1w {z0.s}, p2, [x13] */ \
+	WORD $0x65bb0810; /* fmla z16.s, p2/m, z0.s, z27.s */ \
+	ADD  R1, R13, R13; \
+	WORD $0xe540e9a1; /* st1w {z1.s}, p2, [x13] */ \
+	WORD $0x65bb0831; /* fmla z17.s, p2/m, z1.s, z27.s */ \
+	ADD  R1, R13, R13; \
+	WORD $0xe540e9a2; /* st1w {z2.s}, p2, [x13] */ \
+	WORD $0x65bb0852; /* fmla z18.s, p2/m, z2.s, z27.s */ \
+	ADD  R1, R13, R13; \
+	WORD $0xe540e9a3; /* st1w {z3.s}, p2, [x13] */ \
+	WORD $0x65bb0873; /* fmla z19.s, p2/m, z3.s, z27.s */ \
+	ADD  R1, R13, R13
+#define ZERO_Z16_19 \
+	WORD $0x25b8c010; /* mov z16.s, #0 */ \
+	WORD $0x25b8c011; /* mov z17.s, #0 */ \
+	WORD $0x25b8c012; /* mov z18.s, #0 */ \
+	WORD $0x25b8c013  /* mov z19.s, #0 */
+#define FOLD_NAN \
+	WORD $0x6590039c; /* fadd z28.s, z28.s, z16.s */ \
+	WORD $0x6591039c; /* fadd z28.s, z28.s, z17.s */ \
+	WORD $0x6592039c; /* fadd z28.s, z28.s, z18.s */ \
+	WORD $0x6593039c  /* fadd z28.s, z28.s, z19.s */
+
+// func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, innerPacked, clobberK, clobberR int) (redos, done, nan int)
 //
 // m >= 1, n a positive multiple of 4, k >= 4, ldc >= n. The inner operand,
 // b (bOuter = 0) or a (bOuter = 1), is packed whole into pi, 16⌈rows/16⌉·kp
 // floats; the outer one is packed one 16-row panel at a time into po,
 // 16·kp floats, just before its blocks run against every inner panel. So
 // the packed inner operand is the one read again and again, and the outer
-// one is read once. clobberK and clobberR are test hooks, 0 in production:
+// one is read once. With innerPacked = 1 the caller packed the inner
+// operand into pi already (ops.Conv2DPlan's weights, PLAN.md 2.2) and its
+// pointer is not read. clobberK and clobberR are test hooks, 0 in
+// production:
 // from<<32 | count clobbers the canary before count checks after the k
 // loop (after the stores), from the check numbered from on. redos counts
 // the failed checks: each redoes a block or its stores, except a failure
@@ -129,7 +189,7 @@
 // when a block failed its check 9 times. nan is 1 if an output stored was
 // NaN or infinite (or garbage from a signal, before its redo), else 0;
 // after a failed check, a NaN output may go unreported.
-TEXT ·gemmSME(SB), NOSPLIT, $0-128
+TEXT ·gemmSME(SB), NOSPLIT, $0-136
 	MOVD c+0(FP), R0
 	MOVD ldc+8(FP), R1
 	MOVD a+16(FP), R2
@@ -141,8 +201,8 @@ TEXT ·gemmSME(SB), NOSPLIT, $0-128
 	MOVD po+64(FP), R8
 	MOVD pi+72(FP), R9
 	MOVD bOuter+80(FP), R3
-	MOVD clobberK+88(FP), R10
-	MOVD clobberR+96(FP), R11
+	MOVD clobberK+96(FP), R10
+	MOVD clobberR+104(FP), R11
 
 	LSL  $2, R1, R1    // R1 = ldc*4, byte stride of the rows of c
 	LSL  $2, R7, R17   // R17 = k*4, byte stride of the rows of a and b
@@ -157,8 +217,17 @@ TEXT ·gemmSME(SB), NOSPLIT, $0-128
 	CANARY
 	ZERO_Z27
 	ZERO_Z28
+	ZERO_Z16_19
 
-	// Pack the inner operand into pi; R2 = the outer one.
+	// Pack the inner operand into pi, unless the caller did; R2 = the outer
+	// one.
+	MOVD innerPacked+88(FP), R24
+	CBZ  R24, pack_inner
+	CBZ  R3, packed_inner
+	MOVD R12, R2
+	B    packed_inner
+
+pack_inner:
 	CBZ  R3, inner_b
 	MOVD R2, R21
 	MOVD R5, R22
@@ -261,12 +330,24 @@ reduce_ij:
 	CSEL GT, R15, R14, R14 // R14 = rows, min(16, m-i0)
 	MOVW $0, R12           // w12 = row of the block
 
+rloop4:
+	CMP  $4, R14
+	BLT  rloop
+	REDUCE4_ROWS
+	STORE4
+	ADD  $4, R12
+	SUB  $4, R14
+	B    rloop4
+
 rloop:
+	CBZ  R14, rdone
 	REDUCE_ROW
 	ADD  R1, R13, R13
 	ADD  $1, R12
 	SUB  $1, R14
-	CBNZ R14, rloop
+	B    rloop
+
+rdone:
 
 	CBZ  R11, checkr
 	LSR  $32, R11, R24
@@ -297,6 +378,7 @@ checkr:
 
 	// A signal since the last check may have clobbered z28: count it as a
 	// redo, so the caller checks the outputs itself.
+	FOLD_NAN
 	NAN_P5
 	CANARY_ZERO
 	BEQ  done_ok
@@ -306,9 +388,9 @@ done_ok:
 	PTEST_P5
 	CSET NE, R12
 	SMSTOP
-	MOVD R19, redos+104(FP)
-	MOVD R24, done+112(FP)
-	MOVD R12, nan+120(FP)
+	MOVD R19, redos+112(FP)
+	MOVD R24, done+120(FP)
+	MOVD R12, nan+128(FP)
 	RET
 
 redok:
@@ -330,13 +412,14 @@ redor:
 	B   reduce
 
 bail:
+	FOLD_NAN
 	NAN_P5
 	PTEST_P5
 	CSET NE, R12
 	SMSTOP
-	MOVD R19, redos+104(FP)
-	MOVD R20, done+112(FP)
-	MOVD R12, nan+120(FP)
+	MOVD R19, redos+112(FP)
+	MOVD R20, done+120(FP)
+	MOVD R12, nan+128(FP)
 	RET
 
 	// pack writes the R22 rows at R21 (row stride R17) as panels at R23,

@@ -20,7 +20,7 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.4                       (done, after 1.2; bit-exact, by the user's decision on 2026-10-12)
 → release v0.4.0 (tagged at e4f3f89: 1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
 2.1                       (done; bit-exact)
-2.2                       (after 2.1; bit-exact)
+2.2                       (done; bit-exact)
 → release (2.1 and 2.2 move no bits, so a minor version for the speed-up)
 2.3                       (only after the user decides on it; a numerics change on SME machines)
 ```
@@ -229,7 +229,7 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
       `Conv2DPlan`'s conv2d_4 slower (2.05 → 2.5 ms), so the threshold starts at 16 rows and the plan is unchanged
       (2.2). Gaps: darwin only (the guard is untested elsewhere); measured on an M5 Pro under a load of 3.5–4, not on
       an M4.
-- [ ] 2.2 `sme-conv2d-plan` — Bit-exact, after 2.1: run `ops.Conv2DPlan`'s GEMM on 2.1's SME kernel where 2.1
+- [x] 2.2 `sme-conv2d-plan` — Bit-exact, after 2.1: run `ops.Conv2DPlan`'s GEMM on 2.1's SME kernel where 2.1
       selects SME and the plan's shape is one `gemmNEON4x4` takes (k ≥ 4, outC a multiple of 4; outC = 1 stays on
       `gemmNEON8x1`), so no golden hash changes. Today the plan calls `tensor.MatMulTransBBias` on 8-position im2col
       blocks, far below 2.1's threshold. Instead: pack the weights once into SME panels in `NewConv2DPlan`, have
@@ -242,6 +242,27 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
       the numbers before and after in `ops/PERFORMANCE.md`. `ops.Conv2D` with groups = 1 runs through the plan, so
       its numbers move too: report them, and rerun `BenchmarkConv2DRouting` to see whether the routing rule should
       change (a routing change is a numerics change of its own; propose it, do not make it).
+      Done (2026-10-12): `NewConv2DPlan` packs the weights once (`internal/sme.Pack`) and a call runs the im2col rows of up
+      to 2²⁰ values of output positions, across output rows, through 2.1's kernel with the inner operand prepacked
+      (`gemmSME`'s new `innerPacked`), which `ops` reaches through `sme.GEMM` in the new package `internal/sme` (set by
+      `tensor` at start-up, nil elsewhere; nothing exported). Selected for k ≥ 32, k·outC·outC/(16⌈outC/16⌉) ≥ 1536 and
+      outH·outW ≥ 1024, per call from 2¹⁹ multiply-adds; a chunk with a NaN or infinite output or a given-up block is
+      computed again on NEON. Tests: 1,768 plan shapes, any chunking, 1–4 workers, mixed NEON/SME calls, fake failing
+      kernels and NaN payloads bit for bit against the NEON plan, 0 allocations (also under -race), `sme.Pack` against
+      the Phase 2 layout, `sme.GEMM`'s redo and NaN paths, `TestConv2DPlanSMESelected`; no golden hash changed. One
+      worker on an Apple M5 Pro: conv2d_1 7.67 → 5.48 ms, conv2d_2 0.90 → 0.64 ms, conv2d_4 2.04 → 0.85 ms, the
+      basic-pitch window 13.8 → 10.2 ms (`Conv2D` 14.0 → 10.6 ms, one more allocation and 3–4 MB more scratch per call
+      on those layers); the stem (k = 9), the outC = 1 layers and all 90 routing shapes stay on NEON, so the routing
+      sweep is unchanged and the proposal is no routing change. Found: (1) im2col writing the panel layout directly, as
+      planned, was 1.5–3.8× slower in Go (conv2d_1 13.8 or 25.6 against 6.8 ms) than contiguous rows plus the kernel's
+      own transpose through `za0`, so only the weights are prepacked; (2) the SME unit is slow to start after Go code ran
+      (a 6.6 µs call takes 10 µs after 1 µs of Go, 16.8 µs after 66 µs), so chunks must be large (conv2d_1 7.2 ms in
+      chunks of 256 positions, 5.4 ms in 1024) and small calls stay on NEON; (3) the reduction of the four tiles, one
+      row at a time, dominated small k: the kernel now reduces four rows at once (same bits), which also made
+      `MatMulTransBBias`' SME shapes 1.03–1.26× faster. The outC = 8 layer (conv2d_1) gains despite filling half a
+      tile. Gaps: the stem stays on NEON (4.7 against 3.6 ms on SME; the check after each block's stores costs about a
+      quarter on such blocks, but checking once per panel would change 2.1's guard); up to 4 MiB of scratch per plan and
+      worker; measured on an M5 Pro under a load of 2.4–4.4, not on an M4.
 - [ ] 2.3 `sme-fast-gemm` — A numerics change, only after the user decides on it: an SME kernel with one FMA chain per
       output, 32×32 output blocks over the four tiles (two A and two B vectors per k step, four `FMOPA`s), for
       `MatMulTransBBias` on SME2 machines. In the spike it ran FlowLM's FFN in 0.55 ms against 0.96 ms for the

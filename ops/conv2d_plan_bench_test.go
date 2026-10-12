@@ -4,6 +4,7 @@
 // are basicPitchLayers of conv2d_plan_test.go; BenchmarkConv2DPlanWhistleStem and
 // BenchmarkConv2DWhistleStem for go-whistle's stem conv added; no BenchmarkConv2DRow.
 // algo-tensor change: go-whistle's stem chunk; BenchmarkConv2DRouting for Conv2D's routing (PLAN 1.3).
+// algo-tensor change: BenchmarkConv2DPlanSweep for the SME2 thresholds (PLAN 2.2).
 
 package ops
 
@@ -123,6 +124,26 @@ func benchConv2DPlan(b *testing.B, layers []benchConvLayer) {
 
 			b.ReportMetric(macs*float64(b.N)/b.Elapsed().Seconds()/1e9, "GMAC/s")
 		})
+	}
+}
+
+// BenchmarkConv2DPlanSweep runs Conv2DPlan.Forward on 3×3 convolutions
+// ("same", with bias, one worker) of 16×16 to 128×128 outputs, 1 to 32
+// input channels (k = 9 to 288) and 8 to 128 out channels: the sweep
+// behind the SME2 thresholds of conv2d_plan_sme.go. Run it with and
+// without ALGO_TENSOR_NO_SME=1 (on a CPU with SME2) and with
+// -benchtime=0.1s; ops/PERFORMANCE.md has the result.
+func BenchmarkConv2DPlanSweep(b *testing.B) {
+	for _, hw := range []int{16, 32, 64, 128} {
+		for _, cin := range []int{1, 2, 4, 8, 16, 32} {
+			for _, o := range []int{8, 16, 32, 128} {
+				benchConv2DPlan(b, []benchConvLayer{{
+					name: fmt.Sprintf("out=%dx%d/k=%d/o=%d", hw, hw, 9*cin, o),
+					h:    hw, w: hw, c: cin, kh: 3, kw: 3, cout: o,
+					p: samePadParams(hw, hw, 3, 3, 1, 1), bias: true,
+				}})
+			}
+		}
 	}
 }
 

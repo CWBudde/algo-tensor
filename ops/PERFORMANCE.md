@@ -3,7 +3,8 @@
 <!-- From github.com/cwbudde/go-pocket-tts internal/runtime/ops/PERFORMANCE.md @ 9faba38; go-whistle dropped it.
 algo-tensor change: the package path, go-whistle's benchmarks next to go-pocket-tts', and the state of the acceleration
 points; the Conv2DPlan benchmarks; Conv2D through Conv2DPlan (v0.3.0) and its routing sweep; the amd64 AVX2 benchmarks
-of MatMulTransBBias and Conv2DPlan; Linear's weight panels and amd64 kernel; the SME2 path of MatMulTransBBias. -->
+of MatMulTransBBias and Conv2DPlan; Linear's weight panels and amd64 kernel; the SME2 path of MatMulTransBBias; Conv2DPlan
+on SME2. -->
 
 This package intentionally started with deterministic, single-threaded CPU kernels as the correctness baseline for
 safetensors-native inference.
@@ -434,12 +435,120 @@ splits (10–32 allocations), and nothing where it does not.
   ran about 8.4 million SME GEMMs with 2,000–3,500 redone blocks and no wrong bit; no block failed nine times in a
   row.
 
+## Conv2DPlan on SME2: same bits (PLAN 2.2)
+
+On darwin/arm64 CPUs with SME2, a `Conv2DPlan` whose GEMM `gemmNEON4x4` takes (k = kh·kw·inC ≥ 4, outC a multiple of 4) and that is deep and wide enough now runs it on 2.1's SME2 kernel. `NewConv2DPlan` packs the weights once into the
+kernel's 16-column panels (`internal/sme.Pack`); a call unrolls the im2col rows of up to 2²⁰ values (4 MiB) of output
+positions, row after row, and runs them through the kernel (`sme.GEMM`, set by `tensor` at start-up), which packs them
+panel by panel through `za0` as in 2.1. Every output keeps `gemmNEON4x4`'s bits, so no golden hash changed and the
+bits do not depend on the chunking of `ForwardRows` or the worker count; a chunk the kernel reports as not bit-exact
+(NaN or infinite outputs, or a block given up after nine signals) is computed again on NEON from the same rows. The
+plan selects the kernel for
+
+- k ≥ 32,
+- k · outC · outC/(16⌈outC/16⌉) ≥ 1536 (the work per position in the columns that fill a 16-column tile), and
+- outH · outW ≥ 1024,
+
+and a call (`Forward`, or `ForwardRows` over some rows) for at least 2¹⁹ multiply-adds; the rest runs NEON as before.
+`ops` reaches the kernel through the new internal package `internal/sme`, so `tensor`'s API does not change. The kernel
+also reduces four rows at once now (below).
+
+`ALGO_TENSOR_NO_SME=1` turns the SME path off in the ops test binary too. Before is `origin/main` (a1320dc), after this
+branch; five rounds alternating the two binaries, median (range):
+
+```bash
+for r in 1 2 3 4 5; do for v in before after; do
+    ./ops-$v.test -test.run '^$' -test.bench 'Conv2DPlanBasicPitch|Conv2DBasicPitch|WhistleStem' -test.benchmem
+done; done
+```
+
+Measured on 2026-10-12 on an Apple M5 Pro, darwin/arm64, Go 1.27.1, one worker, 1-minute load average 2.4–4.4:
+
+| layer                                    | `Conv2DPlan` before    | `Conv2DPlan` after     | speed-up | `Conv2D` before        | `Conv2D` after         | speed-up |
+| ---------------------------------------- | ---------------------- | ---------------------- | -------: | ---------------------- | ---------------------- | -------: |
+| conv2d_1 (172×264×8, 3×39 → 8)           | 7.67 (7.64–7.78) ms    | 5.48 (5.40–6.59) ms    |    1.40× | 7.74 (7.71–8.39) ms    | 5.64 (5.49–5.96) ms    |    1.37× |
+| contours-reduced (172×264×8, 5×5 → 1)    | 1.55 ms                | 1.55 ms                |        – | 1.55 ms                | 1.54 ms                |        – |
+| conv2d_2 (172×264×1, 7×7 → 32, (1, 3))   | 0.899 (0.896–0.909) ms | 0.643 (0.635–0.741) ms |    1.40× | 0.965 (0.949–1.089) ms | 0.768 (0.763–0.789) ms |    1.26× |
+| conv2d_3 (172×88×32, 7×3 → 1)            | 1.13 ms                | 1.15 ms                |        – | 1.14 ms                | 1.16 ms                |        – |
+| conv2d_4 (172×264×8, 5×5 → 32, (1, 3))   | 2.04 (2.04–2.08) ms    | 0.847 (0.841–0.864) ms |    2.41× | 2.10 (2.10–2.34) ms    | 0.993 (0.973–1.133) ms |    2.12× |
+| conv2d_5 (172×88×33, 3×3 → 1)            | 0.526 ms               | 0.527 ms               |        – | 0.530 ms               | 0.529 ms               |        – |
+| **basic-pitch window**                   | **13.8 ms**            | **10.2 ms**            |    1.36× | **14.0 ms**            | **10.6 ms**            |    1.32× |
+| go-whistle stem (3000×80×1, 3×3 → 128/2) | 3.58 ms                | 3.60 ms                |        – | 3.81 ms                | 3.85 ms                |        – |
+| go-whistle stem chunk (71×80×1)          | 83 µs                  | 84 µs                  |        – | 113 µs                 | 113 µs                 |        – |
+
+The single-channel layers (outC = 1, `gemmNEON8x1`) and go-whistle's stem (k = 9) stay on NEON. `Conv2DPlan` still
+allocates nothing per call. `Conv2D`, which builds a plan per call, allocates once more on the three SME layers (the
+packed weights) and 3.0–4.3 MB more per call for the larger scratch (5.8 instead of 1.5 MB for conv2d_1). Under
+js/wasm and on amd64 nothing changed.
+
+`BenchmarkConv2DRouting` (three rounds per binary, `-benchtime=0.2s`, minimum per path): the plan path takes the same
+time as before on all 90 shapes (0.99–1.04 of before), none of which the plan runs on SME (at most 256 positions); the
+24 routed shapes take 0.14–0.91 of the direct path's time before and after, the 66 others 0.35–2.04 and 0.36–2.03, the
+same 30 of them faster. **Routing proposal: no change.** The SME path reaches no geometry the rule declines: it needs
+k ≥ 32 and 1024 positions, where `planGains` (k ≥ 4, 64 positions, outC ≤ 16·k) routes everything but outC > 512.
+
+`BenchmarkConv2DPlanSweep` (3×3 convolutions, "same", 16 × 16 to 128 × 128 outputs, k = 9 to 288, outC 8 to 128) gives
+SME's time over NEON's, with the thresholds above, as the test binary with and without `ALGO_TENSOR_NO_SME` (two
+rounds, minimum): 0.19–0.72 on the shapes it selects (from 32 × 32 outputs: k = 36 with 128 out channels, k = 72 with
+32 and 128, k ≥ 144 with 16 to 128), 0.99–1.01 on the others.
+
+How the thresholds and the design were chosen (a prototype of this change, one worker, same machine):
+
+- **Which shapes.** With SME forced on every shape of the sweep (one chunk per image), SME's time over NEON's barely
+  depended on the image size (16 × 16 to 128 × 128) but on k and outC: k = 9 lost 1.5–1.9×, k = 18 1.1–1.6×; with 8
+  out channels, where every block fills half a tile, k = 72 lost 1.4× and k = 288 tied (0.95–1.04); 16 channels gained
+  from k = 144 (0.77), 32 from k = 72 (0.77), 128 from k = 36 (0.82). basic-pitch's conv2d_1 (k = 936, 8 channels)
+  gains 1.4×. All 27 routing shapes with k ≥ 4 and outC a multiple of 4 lost through `Conv2D` (1.1–3.1×: the packing
+  and the larger scratch per call), and `Conv2D` gained only from about 48 × 48 outputs on the sweep's shapes, hence
+  the 1024 positions.
+- **The kernel needs time to start.** One 256 × 32 × 200 call takes 6.6 µs back to back but 10.0 µs after 0.7 or
+  6.6 µs of Go code, and 16.8 µs after 66 µs: the SME unit idles while the core runs Go (here: im2col) and is slower
+  to start again. So a call should cover many positions, as long as its rows stay in the cache: conv2d_1 took 7.2 ms
+  in chunks of 256 positions, 5.9 ms in 512, 5.4 ms in 1024 (3.7 MiB of rows), 5.3 ms in 2048, 5.4 ms in 4096 and
+  7.1 ms with its 170 MiB of rows in one chunk; conv2d_4 kept gaining up to 16384 positions (1.06 ms in chunks of 256,
+  0.97 in 1024, 0.82 in 16384). The 2²⁰-value chunk is the compromise with the plan's memory. For the same reason a call of a few rows of a light layer
+  stays on NEON: `ForwardRows` over one row of conv2d_2 (88 positions) lost 4 % on SME, over four rows it gained 9 %;
+  conv2d_1 and conv2d_4 gained from one row on (9 % and 34 %).
+- **im2col straight into panels is slower.** Measured with 2.1's reduction, one row at a time. PLAN 2.2 proposed that im2col write A directly in the kernel's 16-row
+  k-major layout. Written in Go, scattering each patch into its lanes (stride 16) or gathering 16 positions per step,
+  conv2d_1 took 25.6 or 13.8 ms and conv2d_4 2.57 or 1.80 ms (chunks of 512 positions), against 6.8 and 1.21 ms with
+  im2col's contiguous rows and the kernel's own transpose through `za0`, which loads 16 values per lane and stores 16
+  per step. Only conv2d_2 (inC = 1, patches of 7 values) was faster gathered (0.82 against 0.94 ms). So the plan keeps
+  its rows and the kernel packs them; the prepacked operand is the weights only.
+- **The reduction.** On small k most of a block's time went to the reduction of the four ZA tiles, one output row at a
+  time: four `MOVA`s, three `FADD`s, the bias, the store and the NaN collector's `FMLA`, each waiting for the one before
+  (the stem: two thirds of the kernel's samples on that loop). The kernel now moves four slices of each tile with one
+  SME2 `MOVA` and interleaves four rows, with one NaN collector per row, in the same order of sums, so no bit moved.
+  That took a 256 × 16 × 64 product with the weights packed from 3.5 to 2.3 µs, and `MatMulTransBBias`' SME shapes
+  (one worker, best of four alternating rounds) gained as well:
+
+  | m × n × k                               | before (µs) | after (µs) | speed-up |
+  | --------------------------------------- | ----------: | ---------: | -------: |
+  | whistle FFN, 375 × 2048 × 512           |       909.3 |      724.5 |    1.26× |
+  | whistle linear, 375 × 512 × 512         |       231.1 |      185.9 |    1.24× |
+  | whistle values, 64 × 64 × 375           |        5.76 |       4.76 |    1.21× |
+  | 256 × 64 × 576                          |        25.2 |       21.3 |    1.18× |
+  | conv tile, 64 × 56 × 576                |        7.34 |       6.32 |    1.16× |
+  | pocket FlowLM in_proj, 64 × 3072 × 1024 |       433.3 |      385.2 |    1.12× |
+  | pocket FlowLM FFN, 64 × 4096 × 1024     |       638.0 |      567.3 |    1.12× |
+  | 16 × 1024 × 1024                        |        61.2 |       57.6 |    1.06× |
+  | pocket Mimi conv, 512 × 32 × 3584       |       130.7 |      127.0 |    1.03× |
+
+  The NEON shapes (GEMVs, the m = 8 blocks) did not change.
+
+- **Not changed: the canary checks.** Without the check after each block's stores (an unsafe experiment only), the
+  256 × 16 × 64 product took 24 % less; without the one after the k loop 3 %. The check after the stores waits for the
+  stores to drain from the SME unit. One check per outer panel instead of per block would save most of it on wide
+  layers (go-whistle's stem has eight blocks per panel), but that changes 2.1's guard, which its tests pin, for a
+  layer that would still lose (k = 9: 4.7 against 3.6 ms in the prototype with the new reduction).
+
 ## Optional acceleration points (correctness contract unchanged)
 
 1. `MatMul` and `Linear`: SIMD/assembly kernels for inner-product loops. Done: `tensor.MatMulTransB` (NEON 4×4 blocks
    on arm64), `tensor.MatMulTransBBias` (NEON 4×4 and 8×1 tiles on arm64, AVX2+FMA 2×4 and 8×1 tiles on amd64, Go tiles
    elsewhere), `DotProduct` and `Axpy` (NEON, AVX2+FMA), `Linear` (weight panels everywhere, a three-token AVX2 kernel
-   on amd64, same bits), and an SME2 kernel for large `MatMulTransBBias` products on Apple M4 and later (same bits).
+   on amd64, same bits), and an SME2 kernel for large `MatMulTransBBias` products and deep `Conv2DPlan` layers on Apple
+   M4 and later (same bits).
 2. `Softmax` + masking: fuse max/exp/sum/normalize pass and mask application.
 3. `LayerNorm`: vectorized mean/variance reduction and affine fuse.
 4. `Attention`: fuse `QK^T` scale + mask + softmax where memory reuse is possible.
