@@ -1,7 +1,8 @@
 //go:build darwin && arm64 && !purego
 
 // algo-tensor's own, not in go-whistle or go-pocket-tts: a stress test of
-// the SME2 path of MatMulTransBBias under signals and GC (PLAN.md 2.1).
+// the SME2 path of MatMulTransBBias under signals and GC (PLAN.md 2.1), and
+// of sme.GEMM (PLAN.md 2.2).
 
 package tensor
 
@@ -19,6 +20,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cwbudde/algo-tensor/internal/sme"
 )
 
 // smeStressDuration is how long TestGemmSMEStress runs its GEMMs.
@@ -27,12 +30,15 @@ const smeStressDuration = 3 * time.Second
 // smeStressCase is one product of TestGemmSMEStress with gemmNEON4x4's
 // output, the gaps between rows and one guard element past the output
 // set to gemmSentinel. public runs it through MatMulTransBBias instead of
-// gemmBiasSMERun.
+// gemmBiasSMERun; pb, when set, holds b packed by sme.Pack and runs it
+// through sme.GEMM, computed again on NEON when that returns false, as
+// ops.Conv2DPlan does.
 type smeStressCase struct {
 	m, n, k, ldc int
 	a, b, bias   []float32
 	want         []float32
 	public       bool
+	pb           []float32
 }
 
 func newSMEStressCase(rng *rand.Rand, m, n, k, ldc int, public bool) smeStressCase {
@@ -58,9 +64,15 @@ func (c *smeStressCase) run(got []float32) int {
 		got[i] = gemmSentinel
 	}
 
-	if c.public {
+	switch {
+	case c.pb != nil:
+		po := make([]float32, sme.PanelRows*sme.Steps(c.k))
+		if !sme.GEMM(got, c.ldc, c.a, po, c.pb, c.bias, c.m, c.n, c.k) {
+			gemmNEON4x4(&got[0], &c.a[0], &c.b[0], &c.bias[0], c.m, c.n, c.k, c.ldc)
+		}
+	case c.public:
 		MatMulTransBBias(got, c.ldc, c.a, c.b, c.bias, c.m, c.n, c.k)
-	} else {
+	default:
 		gemmBiasSMERun(got, c.ldc, c.a, c.b, c.bias, c.m, c.n, c.k)
 	}
 
@@ -91,7 +103,8 @@ func untilClosed(wg *sync.WaitGroup, stop <-chan struct{}, fn func()) {
 // seconds under a CPU profile, a SIGUSR1 storm and runtime.GC and checks
 // every output bit, gap and guard against gemmNEON4x4: on darwin a signal
 // that arrives in streaming mode zeroes lanes 4-15 of every Z register,
-// which gemmSME must detect and redo.
+// which gemmSME must detect and redo. The products run through
+// gemmBiasSMERun, MatMulTransBBias and sme.GEMM with b packed by sme.Pack.
 func TestGemmSMEStress(t *testing.T) {
 	if !gemmBiasUseSME {
 		t.Skip("no SME2")
@@ -105,7 +118,8 @@ func TestGemmSMEStress(t *testing.T) {
 
 	direct := [][3]int{{21, 20, 4}, {7, 36, 5}, {40, 64, 6}, {21, 20, 7}, {7, 64, 8}, {40, 36, 9}, {1, 20, 9}}
 	public := [][3]int{{40, 36, 297}, {21, 64, 672}}
-	cases := make([]smeStressCase, 0, 2*(len(direct)+len(public)))
+	packed := [][3]int{{40, 36, 297}, {3, 20, 7}, {17, 64, 200}}
+	cases := make([]smeStressCase, 0, 2*(len(direct)+len(public)+len(packed)))
 
 	for _, s := range direct {
 		cases = append(cases, newSMEStressCase(rng, s[0], s[1], s[2], s[1], false),
@@ -119,6 +133,15 @@ func TestGemmSMEStress(t *testing.T) {
 
 		cases = append(cases, newSMEStressCase(rng, s[0], s[1], s[2], s[1], true),
 			newSMEStressCase(rng, s[0], s[1], s[2], s[1]+3, true))
+	}
+
+	for _, s := range packed {
+		for _, ldc := range []int{s[1], s[1] + 3} {
+			c := newSMEStressCase(rng, s[0], s[1], s[2], ldc, false)
+			c.pb = make([]float32, sme.PackedLen(c.n, c.k))
+			sme.Pack(c.pb, c.b, c.n, c.k)
+			cases = append(cases, c)
+		}
 	}
 
 	err := pprof.StartCPUProfile(io.Discard)
@@ -183,8 +206,8 @@ func TestGemmSMEStress(t *testing.T) {
 
 			if i := c.run(got[ci]); i >= 0 && bad.Add(1) == 1 {
 				firstMu.Lock()
-				first = fmt.Sprintf("m=%d n=%d k=%d ldc=%d public=%v: c[%d] = %#08x, NEON %#08x",
-					c.m, c.n, c.k, c.ldc, c.public, i, math.Float32bits(got[ci][i]), math.Float32bits(c.want[i]))
+				first = fmt.Sprintf("m=%d n=%d k=%d ldc=%d public=%v packed=%v: c[%d] = %#08x, NEON %#08x",
+					c.m, c.n, c.k, c.ldc, c.public, c.pb != nil, i, math.Float32bits(got[ci][i]), math.Float32bits(c.want[i]))
 				firstMu.Unlock()
 			}
 		})
