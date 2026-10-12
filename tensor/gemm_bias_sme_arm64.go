@@ -17,7 +17,9 @@ import (
 // streaming-mode section. With bOuter = 0 it packs b whole into pi and runs
 // a panel by panel through po, with bOuter = 1 the other way round; po
 // holds 16·kp floats (kp = 4⌈k/4⌉) and pi 16·⌈rows/16⌉·kp for the rows of
-// the inner operand. clobberK and clobberR are test hooks (see
+// the inner operand; with innerPacked = 1, pi holds the inner operand
+// packed by the caller (gemmBiasSMEPacked). clobberK and clobberR are test
+// hooks (see
 // smeClobberK). It returns the number of failed signal checks (each
 // redoes a block or its stores), the outer rows done (rows of a for bOuter
 // = 0, of b for 1): all, or fewer when one block failed its check nine
@@ -29,7 +31,7 @@ import (
 // gemmNEON4x4's bits.
 //
 //go:noescape
-func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, clobberK, clobberR int) (redos, done, nan int)
+func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, innerPacked, clobberK, clobberR int) (redos, done, nan int)
 
 // gemmBiasUseSME reports whether MatMulTransBBias runs the products that
 // smeTakes accepts on gemmSME. It is set once at start-up (smeSupported).
@@ -177,7 +179,7 @@ func gemmBiasSMERun(c []float32, ldc int, a, b, bias []float32, m, n, k int) {
 	}
 
 	redos, done, nan := gemmSME(&c[0], ldc, &a[0], &b[0], &bias[0], m, n, k, &s.buf[0], &s.buf[no],
-		bOuter, int(smeClobberK.Load()), int(smeClobberR.Load()))
+		bOuter, 0, int(smeClobberK.Load()), int(smeClobberR.Load()))
 	smeScratchPool.Put(s)
 
 	if redos > 0 {

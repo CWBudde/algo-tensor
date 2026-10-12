@@ -2,7 +2,8 @@
 
 // algo-tensor's own, not in go-whistle or go-pocket-tts: an SME2 kernel for
 // MatMulTransBBias that gives every output gemmNEON4x4's bits (PLAN.md 2.1).
-// algo-tensor change: four rows reduced at once (PLAN.md 2.2).
+// algo-tensor change: four rows reduced at once; a prepacked inner operand
+// for ops.Conv2DPlan (PLAN.md 2.2).
 
 // SME2 GEMM kernel for MatMulTransBBias on Apple M4 and later (streaming
 // vector length 512 bits: 16 float32 lanes, four 16×16 float32 ZA tiles).
@@ -169,14 +170,17 @@
 	WORD $0x6592039c; /* fadd z28.s, z28.s, z18.s */ \
 	WORD $0x6593039c  /* fadd z28.s, z28.s, z19.s */
 
-// func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, clobberK, clobberR int) (redos, done, nan int)
+// func gemmSME(c *float32, ldc int, a, b, bias *float32, m, n, k int, po, pi *float32, bOuter, innerPacked, clobberK, clobberR int) (redos, done, nan int)
 //
 // m >= 1, n a positive multiple of 4, k >= 4, ldc >= n. The inner operand,
 // b (bOuter = 0) or a (bOuter = 1), is packed whole into pi, 16⌈rows/16⌉·kp
 // floats; the outer one is packed one 16-row panel at a time into po,
 // 16·kp floats, just before its blocks run against every inner panel. So
 // the packed inner operand is the one read again and again, and the outer
-// one is read once. clobberK and clobberR are test hooks, 0 in production:
+// one is read once. With innerPacked = 1 the caller packed the inner
+// operand into pi already (ops.Conv2DPlan's weights, PLAN.md 2.2) and its
+// pointer is not read. clobberK and clobberR are test hooks, 0 in
+// production:
 // from<<32 | count clobbers the canary before count checks after the k
 // loop (after the stores), from the check numbered from on. redos counts
 // the failed checks: each redoes a block or its stores, except a failure
@@ -185,7 +189,7 @@
 // when a block failed its check 9 times. nan is 1 if an output stored was
 // NaN or infinite (or garbage from a signal, before its redo), else 0;
 // after a failed check, a NaN output may go unreported.
-TEXT ·gemmSME(SB), NOSPLIT, $0-128
+TEXT ·gemmSME(SB), NOSPLIT, $0-136
 	MOVD c+0(FP), R0
 	MOVD ldc+8(FP), R1
 	MOVD a+16(FP), R2
@@ -197,8 +201,8 @@ TEXT ·gemmSME(SB), NOSPLIT, $0-128
 	MOVD po+64(FP), R8
 	MOVD pi+72(FP), R9
 	MOVD bOuter+80(FP), R3
-	MOVD clobberK+88(FP), R10
-	MOVD clobberR+96(FP), R11
+	MOVD clobberK+96(FP), R10
+	MOVD clobberR+104(FP), R11
 
 	LSL  $2, R1, R1    // R1 = ldc*4, byte stride of the rows of c
 	LSL  $2, R7, R17   // R17 = k*4, byte stride of the rows of a and b
@@ -215,7 +219,15 @@ TEXT ·gemmSME(SB), NOSPLIT, $0-128
 	ZERO_Z28
 	ZERO_Z16_19
 
-	// Pack the inner operand into pi; R2 = the outer one.
+	// Pack the inner operand into pi, unless the caller did; R2 = the outer
+	// one.
+	MOVD innerPacked+88(FP), R24
+	CBZ  R24, pack_inner
+	CBZ  R3, packed_inner
+	MOVD R12, R2
+	B    packed_inner
+
+pack_inner:
 	CBZ  R3, inner_b
 	MOVD R2, R21
 	MOVD R5, R22
@@ -376,9 +388,9 @@ done_ok:
 	PTEST_P5
 	CSET NE, R12
 	SMSTOP
-	MOVD R19, redos+104(FP)
-	MOVD R24, done+112(FP)
-	MOVD R12, nan+120(FP)
+	MOVD R19, redos+112(FP)
+	MOVD R24, done+120(FP)
+	MOVD R12, nan+128(FP)
 	RET
 
 redok:
@@ -405,9 +417,9 @@ bail:
 	PTEST_P5
 	CSET NE, R12
 	SMSTOP
-	MOVD R19, redos+104(FP)
-	MOVD R20, done+112(FP)
-	MOVD R12, nan+120(FP)
+	MOVD R19, redos+112(FP)
+	MOVD R20, done+120(FP)
+	MOVD R12, nan+128(FP)
 	RET
 
 	// pack writes the R22 rows at R21 (row stride R17) as panels at R23,
