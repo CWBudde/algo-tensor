@@ -3,6 +3,7 @@
 // go-whistle change: without LayerNorm (Needle 3 norms are ZCRMSNorm); cyclop added to MatMul's nolint.
 // algo-tensor change: LayerNorm restored from go-pocket-tts @ 9faba38, with a cyclop nolint.
 // algo-tensor change: Linear takes the batch from the leading dimensions, so a zero-width input gives the bias rows.
+// algo-tensor change: Linear runs linearRun (linear.go), a cache-blocked loop over the same dotF32 per output.
 
 package tensor
 
@@ -315,50 +316,13 @@ func Linear(x, weight, bias *Tensor) (*Tensor, error) {
 	batch, _ := shapeElemCount(x.shape[:x.Rank()-1])
 
 	outData := make([]float32, batch*int(out))
-	inI := int(in)
-	outI := int(out)
 
-	wData := weight.data
-	runBatchRange := func(lo, hi int) {
-		for bIdx := lo; bIdx < hi; bIdx++ {
-			xSlice := x.data[bIdx*inI : bIdx*inI+inI]
-
-			yBase := bIdx * outI
-			for o := range outI {
-				sum := dotF32(xSlice, wData[o*inI:(o+1)*inI])
-				if bias != nil {
-					sum += bias.data[o]
-				}
-
-				outData[yBase+o] = sum
-			}
-		}
+	var biasData []float32
+	if bias != nil {
+		biasData = bias.data
 	}
 
-	runOutputRangeSingleRow := func(lo, hi int) {
-		xSlice := x.data[:inI]
-		for o := lo; o < hi; o++ {
-			sum := dotF32(xSlice, wData[o*inI:(o+1)*inI])
-			if bias != nil {
-				sum += bias.data[o]
-			}
-
-			outData[o] = sum
-		}
-	}
-
-	const linearParallelMinFMAs = int64(1 << 18)
-	totalFMAs := int64(batch) * int64(outI) * int64(inI)
-
-	workers := getWorkers()
-	switch {
-	case workers > 1 && totalFMAs >= linearParallelMinFMAs && batch > 1:
-		parallelFor(batch, workers, runBatchRange)
-	case workers > 1 && totalFMAs >= linearParallelMinFMAs && batch == 1 && outI > 1:
-		parallelFor(outI, workers, runOutputRangeSingleRow)
-	default:
-		runBatchRange(0, batch)
-	}
+	linearRun(outData, x.data, weight.data, biasData, batch, int(in), int(out))
 
 	// Build outShape in-place; reuse the first (rank-1) elements of x.shape.
 	outShape := make([]int64, x.Rank())

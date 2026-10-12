@@ -2,6 +2,7 @@
 // go-whistle's own, not in go-pocket-tts.
 // algo-tensor change: TestGemmBiasMatchesGeneric for MatMulTransBBias's NEON kernels.
 // algo-tensor change: TestGemmBiasMatchesGeneric also for its AVX2 kernels.
+// algo-tensor change: TestLinearDot3MatchesDotF32 for Linear's AVX2 kernel.
 
 package tensor
 
@@ -12,7 +13,7 @@ import (
 )
 
 // The tests in this file compare each dispatching kernel (dotF32, axpyF32,
-// matMulTransB, gemmBias) with its pure-Go fallback, as AGENTS.md requires
+// matMulTransB, gemmBias, linearDot3) with its pure-Go fallback, as AGENTS.md requires
 // for every assembly routine. With the purego build tag, or on an
 // architecture without assembly, both sides are the fallback and the tests
 // pass trivially; on arm64 (NEON) and amd64 with AVX2+FMA they exercise the
@@ -188,6 +189,85 @@ func TestGemmBiasMatchesGeneric(t *testing.T) {
 				for g := i*ldc + n; g < (i+1)*ldc; g++ {
 					if got[g] != gemmSentinel {
 						t.Fatalf("m=%d n=%d k=%d: gap c[%d] = %v was overwritten", m, n, k, g, got[g])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestLinearDot3MatchesDotF32: Linear's AVX2 kernel must give every output
+// dotF32AVX2's bits, which is what dotF32 runs for 8 values or more with
+// AVX2 and FMA, the only place Linear uses the kernel. Rows lie ldx and
+// ldy apart and start off any vector alignment. Besides random rows, some
+// hold infinities, subnormals, signed zeros and NaNs, and some hold only a
+// NaN in x against a NaN in w at the same index, in the vector part or in
+// the scalar tail, with a payload per row: which payload comes out shows
+// which operand each FMA took as its second source. It skips where
+// linearDot3 has no assembly.
+func TestLinearDot3MatchesDotF32(t *testing.T) {
+	if !linearDot3Asm {
+		t.Skip("no Linear kernel in assembly on this configuration")
+	}
+
+	rng := rand.New(rand.NewPCG(19, 20))
+	specials := []float32{
+		math.Float32frombits(0x7fc00011), float32(math.Inf(1)), float32(math.Inf(-1)),
+		math.Float32frombits(3), math.Float32frombits(0x807ffff0), float32(math.Copysign(0, -1)),
+	}
+
+	for _, n := range asmLengths() {
+		if n < 8 {
+			continue
+		}
+
+		for off := range 4 {
+			for _, kind := range []string{"random", "specials", "NaN pair at n/2", "NaN pair at n-1"} {
+				ldx, ldy := n+off, 5+off
+				x := randGemmData(rng, 2*ldx+n+off)[off:]
+				w := randGemmData(rng, n+off)[off:]
+
+				switch kind {
+				case "specials":
+					for i, p := range []int{0, n / 3, n - 1, n / 2} {
+						x[(i%3)*ldx+p] = specials[(i+off)%len(specials)]
+						w[(p+7)%n] = specials[(i+off+2)%len(specials)]
+					}
+				case "NaN pair at n/2", "NaN pair at n-1":
+					p := n / 2
+					if kind == "NaN pair at n-1" {
+						p = n - 1
+					}
+
+					for r := range 3 {
+						x[r*ldx+p] = math.Float32frombits(0x7fc00020 + uint32(r))
+					}
+
+					w[p] = math.Float32frombits(0xffc00030)
+				}
+
+				y := make([]float32, 2*ldy+1)
+				for i := range y {
+					y[i] = gemmSentinel
+				}
+
+				linearDot3(y, ldy, x, ldx, w[:n])
+
+				for i := range y {
+					if i%ldy != 0 {
+						if y[i] != gemmSentinel {
+							t.Fatalf("n=%d off=%d: y[%d] = %v was overwritten", n, off, i, y[i])
+						}
+
+						continue
+					}
+
+					r := i / ldy
+					want := dotF32(x[r*ldx:r*ldx+n], w[:n])
+
+					if math.Float32bits(y[i]) != math.Float32bits(want) {
+						t.Fatalf("n=%d off=%d %s: row %d = %v (%#08x), dotF32AVX2 %v (%#08x)",
+							n, off, kind, r, y[i], math.Float32bits(y[i]), want, math.Float32bits(want))
 					}
 				}
 			}
