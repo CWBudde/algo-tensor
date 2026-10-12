@@ -3,7 +3,7 @@
 <!-- From github.com/cwbudde/go-pocket-tts internal/runtime/ops/PERFORMANCE.md @ 9faba38; go-whistle dropped it.
 algo-tensor change: the package path, go-whistle's benchmarks next to go-pocket-tts', and the state of the acceleration
 points; the Conv2DPlan benchmarks; Conv2D through Conv2DPlan (v0.3.0) and its routing sweep; the amd64 AVX2 benchmarks
-of MatMulTransBBias and Conv2DPlan; Linear's weight panels and amd64 kernel. -->
+of MatMulTransBBias and Conv2DPlan; Linear's weight panels and amd64 kernel; the SME2 path of MatMulTransBBias. -->
 
 This package intentionally started with deterministic, single-threaded CPU kernels as the correctness baseline for
 safetensors-native inference.
@@ -348,12 +348,98 @@ its prompt, its voice conditioning and Mimi gain. The Mimi conv tile (A is the 7
 patches) gained nothing significant: with panels of 18 rows of B, A is read twice. Default worker counts were not
 measured: at that load a multi-threaded time on the shared VM says little.
 
+## MatMulTransBBias on SME2: same bits (PLAN 2.1)
+
+On darwin/arm64 CPUs with SME2 (Apple M4 and later, `hw.optional.arm.FEAT_SME2`), `tensor.MatMulTransBBias` runs
+products with k ≥ 4, n a multiple of 4, at least 16 rows, 16 columns and 2¹⁵ multiply-adds on an SME2 kernel
+(`gemm_bias_sme_arm64.s`) that gives every output `gemmNEON4x4`'s bits, so no golden hash changed (the golden case
+`MatMulTransBBias/200x36x300` runs on it). It is one streaming-mode section per worker. The operand with fewer rows is
+packed whole into 16-row panels, k-major, with the tail group of Phase 2's notes; the other one is packed panel by
+panel. Both are transposed through ZA tile `za0` in the kernel itself, into scratch from a `sync.Pool`. Every 16 × 16
+block runs one ZA tile per k%4 lane, then the reduction `((t0 + t1) + (t2 + t3)) + bias` and a predicated store with
+`ldc`. A canary in z31 guards every block against the signals that clobber Z registers in streaming mode on darwin.
+Smaller products, GEMVs and other systems run NEON as before. On more than one worker a product of at least 2²⁵
+multiply-adds splits the larger of m and n into one piece per worker.
+
+`BenchmarkMatMulTransBBias` now also runs `BenchmarkMatMulTransB`'s shapes with n a multiple of 4. NEON (before) and
+SME2 (after) are the same test binary, with `ALGO_TENSOR_NO_SME=1` turning the SME path off; the worker count is
+GOMAXPROCS at start-up:
+
+```bash
+go test -c -o tensor.test ./tensor
+for w in 1 15; do                                   # one worker, and the default on this machine
+    ALGO_TENSOR_NO_SME=1 GOMAXPROCS=$w ./tensor.test -test.run '^$' -test.bench 'MatMulTransBBias$' -test.benchtime=400ms -test.benchmem
+    GOMAXPROCS=$w ./tensor.test -test.run '^$' -test.bench 'MatMulTransBBias$' -test.benchtime=400ms -test.benchmem
+done
+```
+
+Measured on 2026-10-12 on an Apple M5 Pro (15 cores in three clusters of five), darwin/arm64, Go 1.27.1. The four
+variants alternated over five rounds; the table gives the minimum in µs, because other work kept the 1-minute load
+average at 3.5–4 and some rounds ran up to 35 % slower. `m × n × k` is A [m, k] · B [n, k]ᵀ:
+
+| m × n × k                               | NEON, 1 worker | SME2, 1 worker | speed-up | NEON, 15 workers | SME2, 15 workers | speed-up |
+| --------------------------------------- | -------------: | -------------: | -------: | ---------------: | ---------------: | -------: |
+| pocket FlowLM in_proj, 64 × 3072 × 1024 |           3424 |            448 |     7.6× |              670 |              286 |     2.3× |
+| pocket FlowLM FFN, 64 × 4096 × 1024     |           4648 |            635 |     7.3× |              897 |              360 |     2.5× |
+| whistle FFN, 375 × 2048 × 512           |           6910 |            912 |     7.6× |              850 |              483 |     1.8× |
+| whistle linear, 375 × 512 × 512         |           1677 |            232 |     7.2× |              321 |              165 |     1.9× |
+| pocket Mimi conv, 512 × 32 × 3584       |            955 |            136 |     7.0× |              226 |              128 |     1.8× |
+| 256 × 64 × 576                          |          156.2 |           25.2 |     6.2× |             53.1 |             25.3 |     2.1× |
+| conv tile, 64 × 56 × 576                |           34.3 |           7.35 |     4.7× |             24.2 |             7.34 |     3.3× |
+| 16 × 1024 × 1024                        |          277.9 |           61.5 |     4.5× |            170.5 |             62.3 |     2.7× |
+| whistle values, 64 × 64 × 375           |           25.3 |           5.77 |     4.4× |             17.6 |             5.79 |     3.0× |
+| pocket FlowLM FFN, 1 × 4096 × 1024      |          244.4 |          241.5 |        – |            243.0 |            241.2 |        – |
+| 1 × 1024 × 1024                         |           58.0 |           59.9 |        – |             58.7 |             59.7 |        – |
+| pocket Mimi in_proj, 1 × 1536 × 512     |           44.2 |           45.0 |        – |             44.4 |             44.9 |        – |
+
+The last three and the six basic-pitch blocks (m = 8, within 2 % before and after) stay on NEON. No call allocates
+on one worker. On 15 workers the NEON split allocates its goroutines as before; the SME path does the same where it
+splits (10–32 allocations), and nothing where it does not.
+
+- **Threshold.** A sweep with SME forced (m 1–64, n 16–1024, k 48–1024, one worker) lost at m = 1 (0.5–1.0×) and on
+  the GEMVs above, whose packed copy of B costs more than NEON's single pass over it. It was mixed at m = 4. From m = 8
+  it gained (1.0–2.4× at m = 8, up to 7.9× at m = 64), except for the n = 8 basic-pitch block (−10 %), which fills half
+  a tile. The 8-row blocks gained alone (conv2d_4's 8 × 32 × 200: 858 → 565 ns), but `Conv2DPlan`, which runs its
+  im2col blocks of 8 rows through `MatMulTransBBias`, lost with them on SME (conv2d_4 2.05 → 2.5 ms). Between two
+  blocks it runs Go code, and every block switches into streaming mode and packs B again. So the least is 16 rows.
+  With that `BenchmarkConv2DPlanBasicPitch` and the whistle stem benchmarks are unchanged against `origin/main` (one
+  worker, best of three, within 1 %: the window 13.8 ms, conv2d_4 2.03 against 2.04 ms). PLAN 2.2 runs the plan's
+  GEMM on SME with prepacked weights.
+- **Loop order.** With A run panel by panel against all of a packed B, as in the spike, the FlowLM FFN took 1.02 ms
+  on one worker: its 16 MiB of packed B streamed from memory once per 16 rows. The kernel now keeps the operand with
+  fewer rows packed (here A, 256 KiB, in the cache) and runs the other one through once: 0.61–0.64 ms. Packing both
+  operands in the kernel per call, through ZA, costs less than the spike's packing of A in Go, and the one-worker
+  times beat the spike's with B prepacked (in_proj 0.45 against 0.52 ms, FFN 0.64 against 0.96 ms, whistle FFN 0.91
+  against 1.23 ms).
+- **Workers.** All workers together reach about 2 TFLOPS, two to two and a half times one worker. On the spike's
+  scaling shape (3072 × 2048 × 512, GFLOPS, best of three):
+
+  | workers     |   1 |    2 |    4 |    6 |    8 |   15 |
+  | ----------- | --: | ---: | ---: | ---: | ---: | ---: |
+  | this kernel | 839 | 1137 | 1720 | 1886 | 1945 | 2082 |
+  | spike       | 616 | 1132 | 1622 |      | 2319 | 1891 |
+
+  On the table's shapes split over workers, the default (15) is within 15 % of the best worker count (whistle linear:
+  180 µs against 156 µs on 6 workers; the others within 6 %), so the split stays as it is. Pieces of fewer than 2²⁴
+  multiply-adds made 16 × 1024 × 1024 slower than one worker (78–87 against 62 µs); four pieces per worker instead of
+  one were no faster.
+
+- **NaNs.** FMOPA, like every instruction that accumulates into ZA, behaves as if FPCR.DN were set: a NaN operand
+  gives the default NaN where `gemmNEON4x4` keeps its payload and sign. The spike's special-value check did not see
+  this; `TestGemmSMESpecialValues` did. The kernel collects 0 · output in a Z register over the whole call and reports
+  a NaN or infinite output, and the call is then computed again on NEON. That costs 4–7 % (a test per row or per block
+  cost 30–40 %, because each made the canary checks wait). After a failed canary check, Go looks for such outputs
+  itself.
+- **Signals.** `TestGemmSMEStress` (3 s, 2 × GOMAXPROCS goroutines, a CPU profile, a SIGUSR1 storm and `runtime.GC`)
+  ran about 8.4 million SME GEMMs with 2,000–3,500 redone blocks and no wrong bit; no block failed nine times in a
+  row.
+
 ## Optional acceleration points (correctness contract unchanged)
 
 1. `MatMul` and `Linear`: SIMD/assembly kernels for inner-product loops. Done: `tensor.MatMulTransB` (NEON 4×4 blocks
    on arm64), `tensor.MatMulTransBBias` (NEON 4×4 and 8×1 tiles on arm64, AVX2+FMA 2×4 and 8×1 tiles on amd64, Go tiles
    elsewhere), `DotProduct` and `Axpy` (NEON, AVX2+FMA), `Linear` (weight panels everywhere, a three-token AVX2 kernel
-   on amd64, same bits).
+   on amd64, same bits), and an SME2 kernel for large `MatMulTransBBias` products on Apple M4 and later (same bits).
 2. `Softmax` + masking: fuse max/exp/sum/normalize pass and mask application.
 3. `LayerNorm`: vectorized mean/variance reduction and affine fuse.
 4. `Attention`: fuse `QK^T` scale + mask + softmax where memory reuse is possible.
