@@ -22,7 +22,8 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 2.1                       (done; bit-exact)
 2.2                       (done; bit-exact)
 → release v0.5.0 (tagged at b9afdfb, the merge of #15: 2.1 and 2.2 move no bits, a minor version for the speed-up)
-2.3                       (only after the user decides on it; a numerics change on SME machines)
+2.3                       (declined by the user's decision on 2026-10-13: about 10–15 % over 2.1's kernel on large
+                          products, not worth arm64/sme golden hashes that CI cannot check)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -270,3 +271,8 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
       SME machines only, so the golden hashes would depend on the CPU within arm64/neon: add an arm64/sme
       configuration to `golden_hashes_test.go`, say in the commit and PR which kernels change and by how much
       (within the pinned `KernelTolerances`), and release it as a new minor version.
+      Declined (2026-10-13), by the user's decision: the shipped bit-exact kernel runs FlowLM's FFN in 0.64 ms and
+      in_proj in 0.45 ms (v0.5.0, after 2.2's four-row reduction), against the spike's 0.55 and 0.40 ms for this
+      kernel, so it would gain about 10–15 % on the large products and nothing on the small ones, in exchange for
+      arm64/sme golden hashes that depend on the CPU and that CI cannot check (GitHub's macOS runners have no SME).
+      Phase 2 ends with 2.2; reopen this if SME machines become a target where that gain matters.
