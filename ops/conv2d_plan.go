@@ -13,6 +13,8 @@
 // with its own im2col scratch; the default stays sequential and allocation-free.
 // algo-tensor change: the GEMM is tensor.MatMulTransBBias with ldc = outC instead of nn's gemm.
 // algo-tensor change: ForwardRows checks its arguments, then calls run, which works on raw slices.
+// algo-tensor change: where the CPU has SME2 and the shape gains, the GEMM runs on tensor's SME2
+// kernel with the weights packed once, in chunks of many positions (conv2d_plan_sme.go, PLAN.md 2.2).
 
 package ops
 
@@ -41,10 +43,19 @@ const conv2DPlanBlockM = 8
 // takes their dot products with the weights, transposed once to
 // [outC][kh·kw·inC] by NewConv2DPlan.
 //
+// On darwin/arm64 CPUs with SME2 (Apple M4 and later), a plan whose GEMM
+// is deep and wide enough runs it on the SME2 kernel of
+// tensor.MatMulTransBBias instead, with the weights packed once for it and
+// the im2col rows of many output positions per call
+// (conv2d_plan_sme.go). The kernel gives every output the bits of the NEON
+// kernel it replaces, so the results do not depend on the CPU, the
+// chunking of ForwardRows or the worker count.
+//
 // The plan owns the packed weights, a copy of the bias and the im2col
-// scratch, so Forward and ForwardRows do not allocate (on the sequential
-// default of SetConvWorkers). Its results differ from Conv2D's in the last
-// bits, Conv2D summing the products in another order.
+// scratch (up to 4 MiB per goroutine where it runs on SME2), so Forward and
+// ForwardRows do not allocate (on the sequential default of
+// SetConvWorkers). Its results differ from Conv2D's in the last bits,
+// Conv2D summing the products in another order.
 //
 // A Conv2DPlan is not safe for concurrent use: calls share the scratch.
 type Conv2DPlan struct {
@@ -61,10 +72,18 @@ type Conv2DPlan struct {
 	wt []float32
 	// bias has outC values, zeros for a nil bias.
 	bias []float32
-	// cols holds one im2col scratch of conv2DPlanBlockM·k values per
-	// goroutine of ForwardRows; cols[0] is the sequential path's, the
-	// others are allocated when SetConvWorkers first asks for them.
+	// cols holds one im2col scratch of colLen values per goroutine of
+	// ForwardRows; cols[0] is the sequential path's, the others are
+	// allocated when SetConvWorkers first asks for them.
 	cols [][]float32
+	// colLen is conv2DPlanBlockM·k, or for the SME2 kernel the rows of
+	// smeChunk positions plus the kernel's panel scratch if that is more.
+	colLen int
+	// pb holds the weights packed for sme.GEMM, nil where the plan runs
+	// MatMulTransBBias only.
+	pb []float32
+	// smeChunk is the number of output positions per sme.GEMM call.
+	smeChunk int
 }
 
 // NewConv2DPlan sets up the convolution of a [1, inH, inW, inC] NHWC image
@@ -101,7 +120,9 @@ func NewConv2DPlan(kernel, bias *tensor.Tensor, inH, inW int, p Conv2DParams) (*
 		copy(c.bias, bias.RawData())
 	}
 
-	c.cols = [][]float32{make([]float32, conv2DPlanBlockM*c.k)}
+	c.colLen = conv2DPlanBlockM * c.k
+	c.setupSME()
+	c.cols = [][]float32{make([]float32, c.colLen)}
 
 	return c, nil
 }
@@ -230,7 +251,7 @@ func (c *Conv2DPlan) run(out, in []float32, r0, r1 int) {
 	}
 
 	for len(c.cols) < workers {
-		c.cols = append(c.cols, make([]float32, conv2DPlanBlockM*c.k))
+		c.cols = append(c.cols, make([]float32, c.colLen))
 	}
 
 	// Chunk i has n/workers rows, one more for i < n%workers.
@@ -282,8 +303,16 @@ func isImage(t *tensor.Tensor, h, w, c int) bool {
 }
 
 // rows computes output rows [r0, r1) into out, the whole output image,
-// with col as the im2col scratch.
+// with col as the im2col scratch: on the SME2 kernel where the plan packed
+// its weights for it and the rows hold enough work (rowsSME), else in
+// blocks of conv2DPlanBlockM positions through MatMulTransBBias.
 func (c *Conv2DPlan) rows(out, x, col []float32, r0, r1 int) {
+	if perRow := c.MACsPerRow(); c.pb != nil && r1-r0 >= (conv2DPlanSMEMinFMAs+perRow-1)/perRow {
+		c.rowsSME(out, x, col, r0, r1)
+
+		return
+	}
+
 	rowLen := c.outW * c.outC
 
 	for y := r0; y < r1; y++ {
