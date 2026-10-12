@@ -1,6 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/tensor/gemm.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/gemm.go @ 9faba38.
 // go-whistle change: large products split over Parallel (docs/FINDINGS.md F-038).
+// algo-tensor change: the doc comment names amd64's kernel (gemm_amd64.go, PLAN.md 1.4).
 
 package tensor
 
@@ -15,8 +16,12 @@ import "fmt"
 // or accumulate themselves.
 //
 // On arm64 a register-blocked NEON kernel computes 4×4 blocks of c, so each
-// loaded vector feeds four FMAs instead of one. Elsewhere it is one
-// DotProduct per output, the same arithmetic as before.
+// loaded vector feeds four FMAs instead of one. Elsewhere every output has
+// the bits of one DotProduct, the same arithmetic as before: on amd64 with
+// AVX2 and FMA (k >= 8, three rows of a or more) Linear's kernel runs three
+// rows of a over each row of b, over panels of b rows that stay in L2, and
+// replays DotProduct's AVX2 loop for each; the leftover rows, and every
+// other configuration, take one DotProduct per output.
 //
 // A product of at least 2·gemmPieceFMAs multiply-adds runs on Parallel:
 // over rows from 8 rows of a on, else over rows of b, in pieces that start

@@ -299,6 +299,55 @@ p50 of three passes), this branch against v0.2.0 through a `go.work`, interleave
 7.3–11.6: `laya` 9583 → 5431 and 9831 → 5553 ms (1.8×), `laya-multilingual` 3693 → 2685 and 4490 → 2677 ms (1.4–1.7×),
 `laya-typed-decisions` 10250 → 5563 and 10248 → 5620 ms (1.8×). Its pinned forward digests did not change.
 
+## MatMulTransB on amd64: Linear's kernel, same bits (PLAN 1.4)
+
+On amd64, `tensor.MatMulTransB` was one `DotProduct` per output. It now runs `Linear`'s loop (`gemm_amd64.go`): the
+rows of A take the place of the tokens and the rows of B of the weight rows, over 256 KiB panels of B, with three rows
+of A against each row of B in `linearDot3AVX2` where `DotProduct` would run its AVX2 loop (k ≥ 8, AVX2 + FMA). So every
+output keeps the bits of one `DotProduct`, on every configuration and for any worker count; no golden hash changed.
+Fewer than three rows of A (a GEMV), k < 8, purego and machines without AVX2 + FMA keep one `DotProduct` per output.
+`TestMatMulTransBBitIdentical` and `TestMatMulTransBWorkersBits` compare against `DotProduct` with `math.Float32bits`
+(special values, misaligned rows, ldc > n, 1 to GOMAXPROCS workers).
+
+`BenchmarkMatMulTransB` runs go-pocket-tts' shapes (FlowLM at d_model 1024 per frame and over a 64-token prompt, a
+Mimi conv as `ops.Conv1D` runs it, a Mimi `in_proj` per frame) and go-whistle's (needle's projections over a 30 s clip,
+one attention score and value tile of 64 queries); `m × n × k` is A [m, k] · B [n, k]ᵀ:
+
+```bash
+GOOS=linux GOARCH=amd64 go test -c -o after.test ./tensor   # and before.test from origin/main with the same benchmark
+taskset -c 77 ./after.test -test.run '^$' -test.bench 'BenchmarkMatMulTransB/.*/kernel' -test.count=1
+```
+
+Measured on 2026-10-12 on the Intel Xeon Gold 5520+ of PLAN 1.2 (a shared VM with 80 vCPUs), one worker pinned with
+`taskset -c 77`, binaries built with Go 1.27.1. Before is `origin/main` (f0f8835) with the benchmark copied in; five
+rounds alternating before and after, `benchstat` medians in ms with the range of the five runs. The VM ran a 1-minute
+load average of 320 to 1200 during the runs, so the ranges are wide; the speed-ups below are the ones benchstat calls
+significant (p = 0.008).
+
+| m × n × k                               | before              | after               | speed-up |
+| --------------------------------------- | ------------------- | ------------------- | -------: |
+| pocket FlowLM FFN, 64 × 4096 × 1024     | 109.1 (85.1–185)    | 16.3 (12.4–18.2)    |     6.7× |
+| pocket FlowLM in_proj, 64 × 3072 × 1024 | 33.9 (32.0–74.0)    | 11.4 (10.1–15.3)    |     3.0× |
+| whistle FFN, 375 × 2048 × 512           | 52.2 (52.0–58.2)    | 18.1 (14.5–21.3)    |     2.9× |
+| 16 × 1024 × 1024                        | 2.27 (2.09–2.31)    | 0.880 (0.714–0.896) |     2.6× |
+| conv tile, 64 × 56 × 576                | 0.148 (0.129–0.170) | 0.078 (0.071–0.085) |     1.9× |
+| whistle scores, 64 × 375 × 48           | 0.238 (0.166–0.279) | 0.135 (0.106–0.148) |     1.8× |
+| whistle linear, 375 × 512 × 512         | 8.07 (6.72–8.96)    | 4.67 (3.50–5.73)    |     1.7× |
+| whistle values, 64 × 64 × 375           | 0.167 (0.153–0.178) | 0.104 (0.085–0.115) |     1.6× |
+| pocket Mimi conv, 512 × 32 × 3584       | 5.02 (4.08–5.27)    | 4.24 (3.73–5.39)    |        – |
+| pocket FlowLM FFN, 1 × 4096 × 1024      | 1.34 (0.92–2.33)    | 2.22 (1.08–2.99)    |        – |
+| pocket Mimi in_proj, 1 × 1536 × 512     | 0.106 (0.095–0.106) | 0.103 (0.098–0.109) |        – |
+| 1 × 1024 × 1024                         | 0.134 (0.131–0.152) | 0.144 (0.142–0.152) |        – |
+
+The GEMVs run the same code before and after; ten more alternating rounds of the two small ones gave medians of 0.138
+against 0.137 ms (1 × 1024 × 1024) and 0.095 against 0.096 ms (1 × 1536 × 512). A kernel that runs one row of A against
+three rows of B (bit-exact as well, measured for `Linear` in #10) was not written: 1 × 1024 × 1024 streams its 4 MiB of
+B at about 30 GB/s, about six times the time its 2²⁰ FMAs need at two 8-wide FMAs per cycle, so it is bound by memory,
+not by the arithmetic a kernel could save. go-pocket-tts' per-frame FlowLM products are such GEMVs, so on amd64 only
+its prompt, its voice conditioning and Mimi gain. The Mimi conv tile (A is the 7 MiB of kernel rows, B the 458 KiB of
+patches) gained nothing significant: with panels of 18 rows of B, A is read twice. Default worker counts were not
+measured: at that load a multi-threaded time on the shared VM says little.
+
 ## Optional acceleration points (correctness contract unchanged)
 
 1. `MatMul` and `Linear`: SIMD/assembly kernels for inner-product loops. Done: `tensor.MatMulTransB` (NEON 4×4 blocks
