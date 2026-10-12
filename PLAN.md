@@ -9,16 +9,16 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 
 ```
 1.1                       (done)
-→ release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe then drops its own
-  kernels (its PLAN 5.1)
+→ release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe can then drop its
+  own kernels
 1.3                       (done, after v0.2.0; a numerics change)
 → release v0.3.0
 → release v0.3.1 (tagged at f4a4dbc: #10, a bit-exact `Linear` over cache-sized weight panels with an AVX2 kernel; v0.3.0
   plus #10 only, without 1.2)
 1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332; a numerics change on
                           AVX2 machines)
-1.4                       (after 1.2; a numerics change)
-→ release v0.4.0 (both amd64 numerics changes in one minor release)
+1.4                       (done, after 1.2; bit-exact, by the user's decision on 2026-10-12)
+→ release v0.4.0 (1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -129,12 +129,22 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       infinite weight that only meets padding gives NaN where the per-pixel path stays finite (pinned in a test). Gap:
       `Conv2D` on amd64 stays on the per-pixel path until 1.2's kernels can be measured on real x86; routing it there
       is a numerics change of its own.
-- [ ] 1.4 `matmul-transb-avx2` — A numerics change, after 1.2: give `tensor.MatMulTransB` on amd64 a register-blocked
-      AVX2 + FMA kernel in place of one `DotProduct` per output (reusing 1.2's kernels where the layout allows), only
-      where `ops_bench_test.go` shows a gain on go-whistle's and go-pocket-tts' shapes, and report the numbers before
+- [x] 1.4 `matmul-transb-avx2` — Bit-exact, after 1.2: give `tensor.MatMulTransB` on amd64 an AVX2 + FMA kernel in
+      place of one `DotProduct` per output that keeps every output's bits: #10's `linearDot3AVX2`, which replays the
+      AVX2 `DotProduct` for three rows against one, fits A · Bᵀ with the rows of A for `Linear`'s tokens. Use it only
+      where `BenchmarkMatMulTransB` shows a gain on go-whistle's and go-pocket-tts' shapes, and report the numbers before
       and after (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all there is).
-      `Linear`, `MatMul`, `Conv1D` and `ConvTranspose1D` run through it, so the hashes of what builds on it can move too.
-      Update `golden_hashes_test.go` in the same commit and describe in the commit message and PR which kernels change,
-      on which configurations, and by how much against the previous output (max abs/relative difference on the golden
-      cases, within the pinned `KernelTolerances`); release as v0.4.0, together with 1.2. Update MIGRATION.md's behaviour
-      column.
+      `ops.Conv1D` and `ops.ConvTranspose1D` run through it (`Linear` and `MatMul` do not). No golden hash may change;
+      a test compares every output with `DotProduct` bit for bit, on special values and for any worker count. Release as
+      v0.4.0, together with 1.2. Update MIGRATION.md's behaviour column.
+      Done (2026-10-12): `gemm_amd64.go` runs `Linear`'s loop for A · Bᵀ (256 KiB panels of B rows, three rows of A
+      per row of B in `linearDot3AVX2`, leftover rows through `DotProduct`) from three rows of A and k ≥ 8 with AVX2 +
+      FMA; `TestMatMulTransBBitIdentical` (k 0–1031, m 0–17, n 1–600, ldc > n, special values, misaligned rows, 1 to
+      GOMAXPROCS workers) and `TestMatMulTransBWorkersBits` compare with `DotProduct` bit for bit, and fail with the
+      leftover rows in `dotF32Generic`; no golden hash changed. On a Xeon Gold 5520+ (one pinned worker, load 320–1200,
+      ops/PERFORMANCE.md): go-pocket-tts' FlowLM over a 64-token prompt 6.7× (FFN) and 3.0× (in_proj), go-whistle's
+      FFN 2.9×, linear 1.7×, attention scores 1.8× and values 1.6×; GEMVs (m < 3, go-pocket-tts' per-frame FlowLM)
+      and the Mimi conv tile unchanged. Not done: the 1-row-of-A × 3-rows-of-B kernel, because the GEMVs are bound by
+      memory (30 GB/s for 4 MiB of B); and default worker counts, not measurable on the loaded VM. Gap: the Mimi conv
+      tile, where A (7 MiB of kernel rows) is much larger than B, reads A once per panel of B. The plan text named a
+      numerics change and 1.2's kernels; the user chose the bit-exact kernel on 2026-10-12.
