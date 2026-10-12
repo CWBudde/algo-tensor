@@ -17,13 +17,13 @@ import (
 `Concat`, broadcasting `BroadcastAdd`/`BroadcastMul`), the layers `Linear`, `MatMul`, `Softmax` and `LayerNorm`, and
 the slice kernels (AVX2 + FMA is checked at run time; shorter slices and tails run the Go loops):
 
-| kernel                                 | arm64                        | amd64                             | elsewhere, or `-tags purego` |
-| -------------------------------------- | ---------------------------- | --------------------------------- | ---------------------------- |
-| `Linear` (y = x · Wᵀ + b)²             | one `DotProduct` per output  | AVX2 + FMA, 3 tokens × 1 row      | one `DotProduct` per output  |
-| `MatMulTransB` (C = A · Bᵀ, row-major) | NEON, register-blocked 4 × 4 | AVX2 + FMA, 3 rows × 1 row³       | Go                           |
-| `MatMulTransBBias` (C = A · Bᵀ + bias) | NEON 4 × 4 and 8 × 1 tiles¹  | AVX2 + FMA 2 × 4 and 8 × 1 tiles¹ | Go tiles, 4 × 2 under wasm   |
-| `DotProduct`                           | NEON from 48 values          | AVX2 + FMA from 8 values          | Go, four accumulators        |
-| `Axpy`                                 | NEON from 8 values           | AVX2 + FMA from 8 values          | Go                           |
+| kernel                                 | arm64                              | amd64                             | elsewhere, or `-tags purego` |
+| -------------------------------------- | ---------------------------------- | --------------------------------- | ---------------------------- |
+| `Linear` (y = x · Wᵀ + b)²             | one `DotProduct` per output        | AVX2 + FMA, 3 tokens × 1 row      | one `DotProduct` per output  |
+| `MatMulTransB` (C = A · Bᵀ, row-major) | NEON, register-blocked 4 × 4       | AVX2 + FMA, 3 rows × 1 row³       | Go                           |
+| `MatMulTransBBias` (C = A · Bᵀ + bias) | NEON 4 × 4 and 8 × 1 tiles¹, SME2⁴ | AVX2 + FMA 2 × 4 and 8 × 1 tiles¹ | Go tiles, 4 × 2 under wasm   |
+| `DotProduct`                           | NEON from 48 values                | AVX2 + FMA from 8 values          | Go, four accumulators        |
+| `Axpy`                                 | NEON from 8 values                 | AVX2 + FMA from 8 values          | Go                           |
 
 ¹ for k ≥ 4 and n = 1 or a multiple of 4; other shapes take the Go tiles (4 × 4, 8 × 1 for single columns). The kernels
 and `ops.Conv2DPlan` come from [algo-transcribe](https://github.com/CWBudde/algo-transcribe)'s `nn` package @ 21ad164,
@@ -35,6 +35,10 @@ weight row, where `DotProduct` would run it (8 values or more); the leftover tok
 
 ³ the same kernel and panels as `Linear`'s, with rows of A for tokens and rows of B for weight rows, from three rows of A
 on: every output has the bits of one `DotProduct`, as before. Fewer rows of A (a GEMV) take one `DotProduct` per output.
+
+⁴ on darwin/arm64 CPUs with SME2 (Apple M4 and later), for products with k ≥ 4, n a multiple of 4, at least 16 rows, 16
+columns and 2¹⁵ multiply-adds: an SME2 kernel (16 × 16 blocks over the four ZA tiles) that gives every output the NEON
+kernel's bits, 4.4–7.6× as fast on one worker (`ops/PERFORMANCE.md`). Smaller products, GEMVs and other systems run NEON.
 
 **`ops`**: scaled dot-product attention (`Attention` with a causal mask and offset, `CausalMask`, and
 `AttentionWithPositions` with absolute positions, padding keys and a context window), interleaved `RoPE` from cos/sin

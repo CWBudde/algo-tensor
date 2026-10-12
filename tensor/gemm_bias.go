@@ -4,6 +4,7 @@
 // Parallel split; gemm, gemmTiled, kernel4x4, kernel4x2, kernel8x1, dot, blockM and tileN
 // renamed to gemmBias, gemmBiasTiled, biasKernel4x4, biasKernel4x2, biasKernel8x1,
 // biasDot, gemmBiasBlockM and gemmBiasTileN.
+// algo-tensor change: large products go to matMulTransBBiasSME first (PLAN.md 2.1).
 
 package tensor
 
@@ -23,7 +24,9 @@ import "fmt"
 // gemmNEON4x4 and gemmNEON8x1, and on amd64 with AVX2 and FMA the kernels
 // gemmAVX2N4 and gemmAVX2N1, both for k >= 4 and n = 1 or a multiple of 4.
 // The tiles sum in other orders than MatMulTransB, so the two differ in the
-// last bits.
+// last bits. On arm64 CPUs with SME2 (Apple M4 and later, on darwin), large
+// products with k >= 4 and n a multiple of 4 run on an SME2 kernel that
+// gives every output gemmNEON4x4's bits (gemm_bias_sme_arm64.go).
 //
 // Rows run in blocks of gemmBiasBlockM = 8. A product of at least
 // 2·gemmPieceFMAs multiply-adds with more than one block splits over
@@ -54,6 +57,10 @@ func matMulTransBBiasSplit(c []float32, ldc int, a, b, bias []float32, m, n, k i
 	}
 
 	bias = bias[:n]
+
+	if matMulTransBBiasSME(c, ldc, a, b, bias, m, n, k) {
+		return
+	}
 
 	if getWorkers() > 1 && m > gemmBiasBlockM && m*n*k >= 2*gemmPieceFMAs {
 		Parallel(m, gemmBiasGrain(n*k), func(lo, hi int) {

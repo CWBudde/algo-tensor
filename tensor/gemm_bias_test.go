@@ -7,6 +7,9 @@
 // basic-pitch shapes listed instead of taken from nn's layer table; the public
 // MatMulTransBBias tests (nil bias, panics, empty products, allocations, worker counts)
 // and BenchmarkMatMulTransBBias, after BenchmarkGemm, added.
+// algo-tensor change: BenchmarkMatMulTransBBias also runs BenchmarkMatMulTransB's shapes
+// with n a multiple of 4, and the allocation test skips the SME path's shapes under the
+// race detector (PLAN.md 2.1).
 
 package tensor
 
@@ -578,6 +581,13 @@ func TestMatMulTransBBiasAllocs(t *testing.T) {
 		bias := randGemmData(rng, n)
 		c := make([]float32, m*n)
 
+		// The SME path's scratch comes from a sync.Pool, which drops items at
+		// random under the race detector; TestMatMulTransBBiasSMEAllocs checks
+		// it without.
+		if raceEnabled && smeTakes(m, n, k) {
+			continue
+		}
+
 		withWorkers(t, 1, func() {
 			for _, bs := range [][]float32{bias, nil} {
 				if allocs := testing.AllocsPerRun(10, func() {
@@ -663,21 +673,45 @@ func cmpBias(bias []float32, n int) []float32 {
 }
 
 // BenchmarkMatMulTransBBias measures one MatMulTransBBias call for every
-// basic-pitch layer shape (one Conv2D block, without the im2col around it)
-// and a product large enough to split over the workers.
+// basic-pitch layer shape (one Conv2D block, without the im2col around it),
+// a product large enough to split over the workers, and the shapes of
+// BenchmarkMatMulTransB with n a multiple of 4 (go-pocket-tts' and
+// go-whistle's, which the SME2 path is for).
 func BenchmarkMatMulTransBBias(b *testing.B) {
 	rng := rand.New(rand.NewPCG(13, 14))
 
-	shapes := append(biasBasicPitchShapes(), [3]int{256, 64, 576})
+	type shape struct {
+		name    string
+		m, n, k int
+	}
+
+	shapes := make([]shape, 0, 18)
+	for _, s := range append(biasBasicPitchShapes(), [3]int{256, 64, 576}) {
+		shapes = append(shapes, shape{fmt.Sprintf("m%d_n%d_k%d", s[0], s[1], s[2]), s[0], s[1], s[2]})
+	}
+
+	shapes = append(shapes,
+		shape{"conv_tile_64x56x576", 64, 56, 576},
+		shape{"gemv_1x1024x1024", 1, 1024, 1024},
+		shape{"linear_16x1024x1024", 16, 1024, 1024},
+		shape{"pocket_flowlm_ffn_1x4096x1024", 1, 4096, 1024},
+		shape{"pocket_flowlm_inproj_64x3072x1024", 64, 3072, 1024},
+		shape{"pocket_flowlm_ffn_64x4096x1024", 64, 4096, 1024},
+		shape{"pocket_mimi_conv_512x32x3584", 512, 32, 3584},
+		shape{"pocket_mimi_inproj_1x1536x512", 1, 1536, 512},
+		shape{"whistle_linear_375x512x512", 375, 512, 512},
+		shape{"whistle_ffn_375x2048x512", 375, 2048, 512},
+		shape{"whistle_values_64x64x375", 64, 64, 375},
+	)
 
 	for _, s := range shapes {
-		m, n, k := s[0], s[1], s[2]
+		m, n, k := s.m, s.n, s.k
 		a := randGemmData(rng, m*k)
 		w := randGemmData(rng, n*k)
 		bias := randGemmData(rng, n)
 		c := make([]float32, m*n)
 
-		b.Run(fmt.Sprintf("m%d_n%d_k%d", m, n, k), func(b *testing.B) {
+		b.Run(s.name, func(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {

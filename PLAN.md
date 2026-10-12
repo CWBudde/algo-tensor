@@ -19,7 +19,7 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
                           AVX2 machines)
 1.4                       (done, after 1.2; bit-exact, by the user's decision on 2026-10-12)
 → release v0.4.0 (tagged at e4f3f89: 1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
-2.1                       (bit-exact: no golden hash may change)
+2.1                       (done; bit-exact)
 2.2                       (after 2.1; bit-exact)
 → release (2.1 and 2.2 move no bits, so a minor version for the speed-up)
 2.3                       (only after the user decides on it; a numerics change on SME machines)
@@ -184,7 +184,7 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
   which Apple's CPUs lack (SIGILL). GitHub's macOS runners have no SME, so the SME tests run on a developer machine
   only.
 
-- [ ] 2.1 `sme-gemm-bias` — Bit-exact: give `tensor.MatMulTransBBias` on arm64 an SME2 path for the shapes
+- [x] 2.1 `sme-gemm-bias` — Bit-exact: give `tensor.MatMulTransBBias` on arm64 an SME2 path for the shapes
       `gemmNEON4x4` takes (k ≥ 4, n a multiple of 4) that gives every output `gemmNEON4x4`'s bits, so no golden hash
       changes, in new files (`arm64 && !purego`, a header saying they are algo-tensor's own as in `gemm_amd64.go`).
       Read Phase 2's notes above first: the panel layout with its tail group, the four tiles per 16×16 output block,
@@ -209,6 +209,26 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
       as `TestGemmAVX2Selected`. All tests pass with and without `-tags purego`, under `-race`, `just test-amd64` and
       the js/wasm build; `TestGoldenHashes` passes unchanged. Record the benchmarks before and after in
       `ops/PERFORMANCE.md` (date, CPU, Go version, one worker and the default), and update the README kernel table.
+      Done (2026-10-12): `gemm_bias_sme_arm64.s` packs both operands itself, through tile za0, the operand with fewer
+      rows whole and the other panel by panel, so each is read once, and runs Phase 2's layout, four tiles per 16×16
+      block and `REDUCE4`'s order with predicated `ldc` stores, in one `SMSTART`/`SMSTOP` per worker; selected once
+      by the sysctl (x/sys/cpu v0.40.0 has no SME2) for k ≥ 4, n a multiple of 4, m ≥ 16, n ≥ 16 and m·n·k ≥ 2¹⁵,
+      0 allocations on one worker (`sync.Pool`). The canary is set once and checked after every k loop and after every
+      block's stores (any lane zero; a failure after the stores redoes only the reduction from the intact ZA); the 9th
+      failure of one block finishes on NEON from that block's rows (columns). Tests: the 1.1 and spike sweeps (7,754
+      shapes) and both `Parallel` splits on 1–16 workers bit for bit against `gemmNEON4x4`, special values, the hooks
+      (redo, fallback, a lost NaN), a 3 s stress test (8.4 million GEMMs, 2,000–3,500 redos, no wrong bit),
+      `TestGemmSMESelected`; no golden hash changed (`MatMulTransBBias/200x36x300` runs on SME). One worker on an Apple
+      M5 Pro: FlowLM in_proj 3.42 → 0.45 ms, its FFN 4.65 → 0.64 ms, go-whistle's FFN 6.91 → 0.91 ms and linear
+      1.68 → 0.23 ms, Mimi's conv tile 0.95 → 0.14 ms, the conv tile and attention values (25–35 µs) 4.7× and 4.4×; on the default 15 workers
+      1.8–3.3×. All workers together reach about 2.1 TFLOPS (spike: 1.9–2.3), within 15 % of the best worker count,
+      so the split stays (one piece per worker, at least 2²⁴ multiply-adds). Found: `FMOPA` gives the default NaN (ZA
+      instructions behave as if FPCR.DN were set), so NaN outputs lost the payload and sign NEON keeps, which the
+      spike's check missed; the kernel collects 0·output in z28 and the call is computed again on NEON for a NaN or
+      infinite output (4–7 %; a check per row or block cost 30–40 %). 8-row products gain alone, but on SME they made
+      `Conv2DPlan`'s conv2d_4 slower (2.05 → 2.5 ms), so the threshold starts at 16 rows and the plan is unchanged
+      (2.2). Gaps: darwin only (the guard is untested elsewhere); measured on an M5 Pro under a load of 3.5–4, not on
+      an M4.
 - [ ] 2.2 `sme-conv2d-plan` — Bit-exact, after 2.1: run `ops.Conv2DPlan`'s GEMM on 2.1's SME kernel where 2.1
       selects SME and the plan's shape is one `gemmNEON4x4` takes (k ≥ 4, outC a multiple of 4; outC = 1 stays on
       `gemmNEON8x1`), so no golden hash changes. Today the plan calls `tensor.MatMulTransBBias` on 8-position im2col
