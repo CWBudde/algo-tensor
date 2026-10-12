@@ -1,5 +1,6 @@
 // From github.com/cwbudde/go-whistle internal/tensor/gemm_test.go @ 8926ee3,
 // originally github.com/cwbudde/go-pocket-tts internal/runtime/tensor/gemm_test.go @ 9faba38.
+// algo-tensor change: BenchmarkMatMulTransB has go-pocket-tts' and go-whistle's shapes (PLAN.md 1.4).
 
 package tensor
 
@@ -195,7 +196,10 @@ func TestMatMulTransBPanicsOnShortSlices(t *testing.T) {
 
 // BenchmarkMatMulTransB compares the kernel with the per-output dot loop on
 // the shapes of the hot callers: an im2col conv tile, a batch-1 Linear
-// (GEMV) and a batched Linear.
+// (GEMV) and a batched Linear, then go-pocket-tts' (FlowLM at d_model 1024
+// per frame and over a 64-token prompt, a Mimi conv as ops.Conv1D runs it,
+// a Mimi in_proj per frame) and go-whistle's (needle's projections over a
+// 30 s clip, one attention score and value tile of 64 queries).
 func BenchmarkMatMulTransB(b *testing.B) {
 	shapes := []struct {
 		name    string
@@ -204,6 +208,15 @@ func BenchmarkMatMulTransB(b *testing.B) {
 		{"conv_tile_64x56x576", 64, 56, 576},
 		{"gemv_1x1024x1024", 1, 1024, 1024},
 		{"linear_16x1024x1024", 16, 1024, 1024},
+		{"pocket_flowlm_ffn_1x4096x1024", 1, 4096, 1024},
+		{"pocket_flowlm_inproj_64x3072x1024", 64, 3072, 1024},
+		{"pocket_flowlm_ffn_64x4096x1024", 64, 4096, 1024},
+		{"pocket_mimi_conv_512x32x3584", 512, 32, 3584},
+		{"pocket_mimi_inproj_1x1536x512", 1, 1536, 512},
+		{"whistle_linear_375x512x512", 375, 512, 512},
+		{"whistle_ffn_375x2048x512", 375, 2048, 512},
+		{"whistle_scores_64x375x48", 64, 375, 48},
+		{"whistle_values_64x64x375", 64, 64, 375},
 	}
 
 	rng := rand.New(rand.NewPCG(5, 6))
