@@ -2,7 +2,8 @@
 
 <!-- From github.com/cwbudde/go-pocket-tts internal/runtime/ops/PERFORMANCE.md @ 9faba38; go-whistle dropped it.
 algo-tensor change: the package path, go-whistle's benchmarks next to go-pocket-tts', and the state of the acceleration
-points; the Conv2DPlan benchmarks; Conv2D through Conv2DPlan (v0.3.0) and its routing sweep. -->
+points; the Conv2DPlan benchmarks; Conv2D through Conv2DPlan (v0.3.0) and its routing sweep; the amd64 AVX2 benchmarks
+of MatMulTransBBias and Conv2DPlan. -->
 
 This package intentionally started with deterministic, single-threaded CPU kernels as the correctness baseline for
 safetensors-native inference.
@@ -65,6 +66,61 @@ basic-pitch window it is 24× faster natively and 8× under js/wasm. The plan's 
 0.50 ms): the plan is 2–7 % slower per layer, most on the single-channel layers; not profiled, the likely cause is the
 checks and the block loop of the exported `tensor.MatMulTransBBias` around nn's kernels. A first, noisier run of the
 same command measured conv2d_1 between 8.5 and 13.9 ms; the table is from a second run on an otherwise idle machine.
+
+### linux/amd64: AVX2 + FMA (PLAN 1.2)
+
+`MatMulTransBBias` runs algo-transcribe nn's AVX2 + FMA kernels @ 58c8332 on amd64 CPUs with AVX2 and FMA (2 × 4 and
+8 × 1 tiles for k ≥ 4 and n = 1 or a multiple of 4), the Go tiles elsewhere. The same benchmarks, with
+`BenchmarkMatMulTransBBias` (one `MatMulTransBBias` call of each layer's GEMM, m = 8) and, for comparison, nn's
+`BenchmarkConv2DWindow` and `BenchmarkGemm` @ 58c8332, as linux/amd64 test binaries with and without `-tags purego`,
+alternating, three rounds, median:
+
+```bash
+GOOS=linux GOARCH=amd64 go test -c -o ops.test ./ops   # and -tags purego, and ./tensor
+docker run --rm --platform linux/amd64 -v "$PWD:/t:ro" debian:bookworm-slim \
+    /t/ops.test -test.run '^$' -test.bench 'Conv2DPlanBasicPitch|Conv2DBasicPitch|WhistleStem' -test.benchmem
+```
+
+**Not a real x86 measurement**: measured on 2026-10-12 in `debian:bookworm-slim` under Docker Desktop's x86 emulation
+(Rosetta, "VirtualApple @ 2.50GHz" with AVX2 and FMA, 15 CPUs) on the Apple M5 Pro, Go 1.27.1, the only x86 at hand. It
+shows the relative order of the paths, not x86 speed; nn measured its kernels on an Intel Xeon Gold 5520+ (algo-transcribe
+`docs/benchmarks/2026-10-11-simd-gemm.md`: the basic-pitch window 19.0 ms with AVX2 against 115 ms with its 4 × 2 Go
+tiles).
+
+| layer                                    | `Conv2DPlan` AVX2 |     nn AVX2 | `Conv2DPlan` purego | nn purego (4 × 2) | `Conv2D` AVX2 | `Conv2D` purego |
+| ---------------------------------------- | ----------------: | ----------: | ------------------: | ----------------: | ------------: | --------------: |
+| conv2d_1 (172×264×8, 3×39 → 8)           |          22.03 ms |    21.90 ms |            137.9 ms |           63.7 ms |      358.4 ms |        187.2 ms |
+| contours-reduced (172×264×8, 5×5 → 1)    |           2.21 ms |     2.15 ms |             5.35 ms |           5.16 ms |       43.8 ms |         26.6 ms |
+| conv2d_2 (172×264×1, 7×7 → 32, (1, 3))   |           2.51 ms |     2.53 ms |            10.88 ms |           5.12 ms |       11.2 ms |          9.1 ms |
+| conv2d_3 (172×88×32, 7×3 → 1)            |           1.67 ms |     1.63 ms |             5.19 ms |           5.03 ms |       45.3 ms |         29.8 ms |
+| conv2d_4 (172×264×8, 5×5 → 32, (1, 3))   |           6.11 ms |     6.17 ms |             39.7 ms |           17.6 ms |       42.3 ms |         31.9 ms |
+| conv2d_5 (172×88×33, 3×3 → 1)            |           0.86 ms |     0.83 ms |             2.28 ms |           2.26 ms |       20.1 ms |         13.1 ms |
+| **basic-pitch window**                   |       **35.4 ms** | **35.2 ms** |        **201.3 ms** |       **98.9 ms** |  **521.2 ms** |    **297.7 ms** |
+| go-whistle stem (3000×80×1, 3×3 → 128/2) |          14.54 ms |             |            35.48 ms |                   |      17.76 ms |        23.43 ms |
+| go-whistle stem chunk (71×80×1)          |            336 µs |             |              822 µs |                   |        427 µs |          566 µs |
+
+| `MatMulTransBBias` (m = 8)    |    AVX2 | Go tiles (purego) | AVX2 vs Go | nn `gemm` AVX2 | nn `gemm` purego (4 × 2) |
+| ----------------------------- | ------: | ----------------: | ---------: | -------------: | -----------------------: |
+| conv2d_1 (n 8, k 936)         | 3303 ns |          23408 ns |      7.1 × |        3155 ns |                 10295 ns |
+| contours-reduced (n 1, k 200) |   90 ns |            613 ns |      6.8 × |          79 ns |                   587 ns |
+| conv2d_2 (n 32, k 49)         | 1019 ns |           5336 ns |      5.2 × |        1001 ns |                  2358 ns |
+| conv2d_3 (n 1, k 672)         |  246 ns |           2029 ns |      8.3 × |         239 ns |                  2004 ns |
+| conv2d_4 (n 32, k 200)        | 2857 ns |          20765 ns |      7.3 × |        2866 ns |                  9071 ns |
+| conv2d_5 (n 1, k 297)         |  132 ns |            919 ns |      6.9 × |         122 ns |                   869 ns |
+
+- With AVX2 the plan runs the window 5.7 × faster than with its Go tiles and 15 × faster than `Conv2D` (which on amd64
+  stays on the per-pixel path), within 1 % of nn @ 58c8332, whose bits it gives on these layers. Every layer takes the
+  AVX2 kernels; none allocates.
+- The multi-channel Go tiles on amd64 are the 4 × 4 tile, which spills on amd64's 16 vector registers: under purego
+  conv2d_1, conv2d_2 and conv2d_4 take 2.1–2.3 × as long as nn's 4 × 2 tile, which nn @ 58c8332 adopted for amd64 (1.6–1.8
+  × on its Xeon). algo-tensor keeps the 4 × 4 tile so that the amd64/go hashes do not change; the single-channel layers
+  run the 8 × 1 tile on both sides and match. It matters on amd64 without AVX2 or FMA, under purego, and for shapes the
+  AVX2 kernels decline.
+- `MatMulTransBBias` takes up to 14 % longer than nn's bare `gemm` (most on the short single-channel GEMMs; conv2d_4
+  the same): its argument checks and 8-row block loop around the same kernels.
+- On the stem (k = 9, 128 out channels) the plan is now faster than `Conv2D` (14.5 against 17.8 ms; the chunk 336 against
+  427 µs); with the Go tiles it was not (see Routing below). Under this emulation `Conv2D` runs faster with purego than
+  with its AVX2 `Axpy`, one more sign that it does not predict x86.
 
 ## Conv2D through Conv2DPlan (v0.3.0)
 
@@ -133,14 +189,20 @@ column on the table.
 The amd64 rows ran in `debian:bookworm-slim` under Docker Desktop's x86 emulation (Rosetta, "VirtualApple" CPU with
 AVX2 and FMA) on the same Mac: not a real x86 measurement, and the only one available. There the plan lost on most
 routed shapes, go-whistle's stem chunk included (2.0× with AVX2, 1.6× with purego in the first sweep): `MatMulTransBBias`
-has only Go tiles on amd64 (PLAN 1.2 adds AVX2 + FMA), against the AVX2 `Axpy`. So `Conv2D` does not route on amd64
-until 1.2's kernels are measured on real hardware.
+had only Go tiles on amd64 then, against the AVX2 `Axpy`. So `Conv2D` does not route on amd64 until PLAN 1.2's kernels
+are measured on real hardware.
+
+With those kernels (PLAN 1.2, 2026-10-12, the same emulation, two runs) the plan path takes 0.15–3.12 of the direct
+path's time on the 24 routed shapes and 0.33–4.09 on the 66 others, 21 of them faster. Of the routed shapes it now loses
+on three: 255 out channels at k = 36 (2.8 and 3.1 ×), which the AVX2 kernels decline (not a multiple of 4) and the 4 × 4
+Go tiles run, and 8 × 8 outputs at k = 9 and 128 out channels (1.06 ×). Routing on amd64 stays off: it needs a real x86
+measurement and is a numerics change of its own (`Conv2D`'s amd64 bits would move).
 
 ## Optional acceleration points (correctness contract unchanged)
 
 1. `MatMul` and `Linear`: SIMD/assembly kernels for inner-product loops. Done: `tensor.MatMulTransB` (NEON 4×4 blocks
-   on arm64), `tensor.MatMulTransBBias` (NEON 4×4 and 8×1 tiles on arm64, Go tiles elsewhere), `DotProduct` and `Axpy`
-   (NEON, AVX2+FMA).
+   on arm64), `tensor.MatMulTransBBias` (NEON 4×4 and 8×1 tiles on arm64, AVX2+FMA 2×4 and 8×1 tiles on amd64, Go tiles
+   elsewhere), `DotProduct` and `Axpy` (NEON, AVX2+FMA).
 2. `Softmax` + masking: fuse max/exp/sum/normalize pass and mask application.
 3. `LayerNorm`: vectorized mean/variance reduction and affine fuse.
 4. `Attention`: fuse `QK^T` scale + mask + softmax where memory reuse is possible.

@@ -120,8 +120,10 @@ func conv2D(input, kernel, bias *tensor.Tensor, p Conv2DParams, path conv2DPath)
 //   - at most conv2DPlanMaxOutPerDepth·k out channels; above that the Axpy
 //     wins against the Go GEMM tiles, which run where the NEON kernels do
 //     not take the shape (out channels not 1 or a multiple of 4);
-//   - not on amd64, where MatMulTransBBias has no assembly yet (PLAN 1.2)
-//     and the plan was slower on go-whistle's stem.
+//   - not on amd64, where the plan was slower on go-whistle's stem with
+//     the Go tiles, and MatMulTransBBias' AVX2 kernels (PLAN 1.2) have
+//     been measured only under emulation; routing there would change
+//     Conv2D's amd64 bits.
 const (
 	conv2DPlanArch           = runtime.GOARCH != "amd64"
 	conv2DPlanMinDepth       = 4

@@ -36,8 +36,9 @@ From v0.3.0 on (PLAN 1.3), `ops.Conv2D` also differs: a groups = 1 convolution w
 `Conv2DPlan` built for the call, im2col plus `tensor.MatMulTransBBias`, instead of one `Axpy` per input tap. That
 includes go-whistle's stem conv (3 × 3, 1 → 128), whole or in chunks. Its outputs differ from go-whistle's in the last
 bits on arm64 and js/wasm, within `KernelTolerance("conv2d")` (on the golden case at most 1.9 × 10⁻⁶ absolute); on
-amd64, where `MatMulTransBBias` has no assembly yet, `Conv2D` keeps go-whistle's code and bits. The depthwise stages
-(groups > 1) do not change. v0.2.0 is the last version with go-whistle's `Conv2D` bits everywhere.
+amd64, where `Conv2D` does not route (`MatMulTransBBias`' AVX2 kernels, PLAN 1.2, are measured only under emulation),
+`Conv2D` keeps go-whistle's code and bits. The depthwise stages (groups > 1) do not change. v0.2.0 is the last version
+with go-whistle's `Conv2D` bits everywhere.
 
 ```sh
 cd go-whistle
