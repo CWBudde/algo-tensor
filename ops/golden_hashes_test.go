@@ -95,6 +95,9 @@ var goldenPocket = map[string]map[string][2]string{
 // goldenTranscribe holds what algo-tensor gave for transcribeGoldenCases,
 // by goldenConfig and case.
 var goldenTranscribe = map[string]map[string][2]string{
+	"amd64/avx2": {
+		"Conv2DPlan": {"af20b09b6a68041e", "af20b09b6a68041e"},
+	},
 	"amd64/go": {
 		"Conv2DPlan": {"7d15cc619b8323f9", "7d15cc619b8323f9"},
 	},

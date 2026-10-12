@@ -17,6 +17,10 @@ import (
 // goldenTranscribe; Conv2DPlan gave the same bits as algo-transcribe nn's
 // Conv2D @ 21ad164 on the same inputs (checked once with a throwaway module
 // on darwin/arm64 and linux/amd64, with and without purego, and on js/wasm).
+// Its amd64/avx2 hash, added with nn's AVX2 kernels @ 58c8332 (PLAN 1.2), gave
+// that commit's bits on every configuration but the one whose out channels
+// (7) the AVX2 kernels decline: there the 4×4 Go tile keeps nn @ 21ad164's
+// bits, where nn @ 58c8332 runs the 4×2 tile on amd64.
 // Conv2D's hashes on arm64 and wasm are algo-tensor's since v0.3.0, where its
 // groups = 1 convolution runs through Conv2DPlan (PLAN 1.3).
 func TestGoldenHashes(t *testing.T) {
