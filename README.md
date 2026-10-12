@@ -20,7 +20,7 @@ the slice kernels (AVX2 + FMA is checked at run time; shorter slices and tails r
 | kernel                                 | arm64                        | amd64                             | elsewhere, or `-tags purego` |
 | -------------------------------------- | ---------------------------- | --------------------------------- | ---------------------------- |
 | `Linear` (y = x · Wᵀ + b)²             | one `DotProduct` per output  | AVX2 + FMA, 3 tokens × 1 row      | one `DotProduct` per output  |
-| `MatMulTransB` (C = A · Bᵀ, row-major) | NEON, register-blocked 4 × 4 | one `DotProduct` per output       | Go                           |
+| `MatMulTransB` (C = A · Bᵀ, row-major) | NEON, register-blocked 4 × 4 | AVX2 + FMA, 3 rows × 1 row³       | Go                           |
 | `MatMulTransBBias` (C = A · Bᵀ + bias) | NEON 4 × 4 and 8 × 1 tiles¹  | AVX2 + FMA 2 × 4 and 8 × 1 tiles¹ | Go tiles, 4 × 2 under wasm   |
 | `DotProduct`                           | NEON from 48 values          | AVX2 + FMA from 8 values          | Go, four accumulators        |
 | `Axpy`                                 | NEON from 8 values           | AVX2 + FMA from 8 values          | Go                           |
@@ -32,6 +32,9 @@ the AVX2 kernels @ 58c8332.
 ² every token runs over a 256 KiB panel of weight rows before the next panel, on every configuration. Each output has the
 bits of one `DotProduct` plus the bias: the amd64 kernel replays the AVX2 `DotProduct` for three tokens against one
 weight row, where `DotProduct` would run it (8 values or more); the leftover tokens take `DotProduct`.
+
+³ the same kernel and panels as `Linear`'s, with rows of A for tokens and rows of B for weight rows, from three rows of A
+on: every output has the bits of one `DotProduct`, as before. Fewer rows of A (a GEMV) take one `DotProduct` per output.
 
 **`ops`**: scaled dot-product attention (`Attention` with a causal mask and offset, `CausalMask`, and
 `AttentionWithPositions` with absolute positions, padding keys and a context window), interleaved `RoPE` from cos/sin
