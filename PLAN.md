@@ -11,10 +11,12 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.1                       (done)
 → release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe then drops its own
   kernels (its PLAN 5.1)
-1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332)
 1.3                       (done, after v0.2.0; a numerics change)
 → release v0.3.0
+1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332; a numerics change on
+                          AVX2 machines)
 1.4                       (after 1.2; a numerics change)
+→ release v0.4.0 (both amd64 numerics changes in one minor release)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -81,7 +83,9 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       a test that fails, not skips, when the `CI` environment variable is set and the CPU reports AVX2 and FMA but
       the AVX2 kernel was not selected; `just test-amd64` passes. Benchmarks on linux/amd64 next to 1.1's in
       `ops/PERFORMANCE.md` (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all
-      there is). Update the README kernel table. Existing golden hashes must not change.
+      there is). Update the README kernel table. Existing golden hashes must not change. The AVX2 kernel still moves
+      `MatMulTransBBias`'s bits on AVX2 machines (today the Go tiles' amd64/go bits), so it is a numerics change and
+      is released with 1.4 as v0.4.0.
       Done: nn's `gemmAVX2N4` (2×4, 1×4) and `gemmAVX2N1` (8×1, 1×1) @ 58c8332 with an `ldc` (N4 keeps its channel
       offset in elements and bounds it by n in memory, to free R11 for ldc·4; N1 stores lane by lane for ldc > 1),
       chosen once by `HasAVX2 && HasFMA` for the NEON shapes (k ≥ 4, n = 1 or a multiple of 4); the direct-kernel,
@@ -93,8 +97,8 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       ported, because it moves the amd64/go hashes, so on 1,099 declined shapes (n ∈ {2, 3, 6, 7}, m mod 8 ≥ 4, at most 8
       outputs, |Δ| ≤ 3.2 × 10⁻⁵) the bits are nn @ 21ad164's, not 58c8332's: golden `MatMulTransBBias/13x6x7` and the
       7-channel configuration of `Conv2DPlan`. Against the Go tiles that amd64 with AVX2 ran before (v0.2.0), the golden
-      cases move by at most 1.9 × 10⁻⁵ (`MatMulTransBBias`) and 2.5 × 10⁻⁵ (`Conv2DPlan`), so it belongs in a minor
-      release (v0.3.0, not tagged yet). Only under Docker's x86 emulation (Rosetta), not real x86: the basic-pitch window
+      cases move by at most 1.9 × 10⁻⁵ (`MatMulTransBBias`) and 2.5 × 10⁻⁵ (`Conv2DPlan`), so it is released with
+      1.4 as v0.4.0. Only under Docker's x86 emulation (Rosetta), not real x86: the basic-pitch window
       35.4 ms with AVX2 against 201.3 ms with the Go tiles (nn: 35.2 and 98.9 ms with its 4×2 tile), the GEMMs 5.2–8.3×;
       the routing sweep now favours the plan on 21 of the 24 routed shapes. Gaps: the 4×2 amd64 tile (a numerics change
       of its own), and routing `Conv2D` on amd64. On a real Xeon Gold 5520+ (ops/PERFORMANCE.md) all tests pass with
@@ -130,5 +134,5 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       `Linear`, `MatMul`, `Conv1D` and `ConvTranspose1D` run through it, so the hashes of what builds on it can move too.
       Update `golden_hashes_test.go` in the same commit and describe in the commit message and PR which kernels change,
       on which configurations, and by how much against the previous output (max abs/relative difference on the golden
-      cases, within the pinned `KernelTolerances`); release as a new minor version. Update MIGRATION.md's behaviour
+      cases, within the pinned `KernelTolerances`); release as v0.4.0, together with 1.2. Update MIGRATION.md's behaviour
       column.
