@@ -1,8 +1,9 @@
-//go:build !arm64 || purego
+//go:build (!arm64 && !amd64) || purego
 
 // From github.com/cwbudde/algo-transcribe nn/gemm_simd_stub.go @ 21ad164.
 // algo-tensor change: renamed; haveSIMD and gemmSIMD renamed to gemmBiasHaveSIMD and
-// gemmBiasSIMD, which takes the output row stride ldc.
+// gemmBiasSIMD, which takes the output row stride ldc; the build constraint of nn @ 58c8332,
+// which adds the amd64 kernels.
 
 package tensor
 

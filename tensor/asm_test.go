@@ -1,6 +1,7 @@
 // From github.com/cwbudde/go-whistle internal/tensor/asm_test.go @ 8926ee3;
 // go-whistle's own, not in go-pocket-tts.
 // algo-tensor change: TestGemmBiasMatchesGeneric for MatMulTransBBias's NEON kernels.
+// algo-tensor change: TestGemmBiasMatchesGeneric also for its AVX2 kernels.
 
 package tensor
 
@@ -15,7 +16,7 @@ import (
 // for every assembly routine. With the purego build tag, or on an
 // architecture without assembly, both sides are the fallback and the tests
 // pass trivially; on arm64 (NEON) and amd64 with AVX2+FMA they exercise the
-// assembly (gemmBias has NEON kernels only).
+// assembly.
 
 // unitRoundoff is the float32 unit roundoff 2^-24.
 const unitRoundoff = 1.0 / (1 << 24)
@@ -146,9 +147,9 @@ func TestMatMulTransBMatchesGeneric(t *testing.T) {
 }
 
 // TestGemmBiasMatchesGeneric compares the dispatching gemmBias (the NEON
-// kernels of gemmBiasSIMD where they apply) with the Go tiles element by
-// element, under the dot-product bound with the bias as one more term, and
-// checks that the gaps between output rows stay untouched.
+// or AVX2 kernels of gemmBiasSIMD where they apply) with the Go tiles
+// element by element, under the dot-product bound with the bias as one
+// more term, and checks that the gaps between output rows stay untouched.
 func TestGemmBiasMatchesGeneric(t *testing.T) {
 	rng := rand.New(rand.NewPCG(17, 18))
 

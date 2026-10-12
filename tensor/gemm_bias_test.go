@@ -225,7 +225,8 @@ func TestGemmBias(t *testing.T) {
 // TestGemmBiasSIMDTails checks the SIMD kernels against the float64
 // reference at the depths TestGemmBiasTiled's sweep lacks: together they
 // give every k%8 remainder, so every k%4 tail mask and the single
-// 4-element step of the 8×1 kernel run.
+// 4-element step of the NEON 8×1 kernel run, and every k%8 tail mask of
+// the AVX2 kernels.
 func TestGemmBiasSIMDTails(t *testing.T) {
 	t.Parallel()
 
@@ -350,7 +351,9 @@ func TestGemmBiasDeterministic(t *testing.T) {
 
 // TestGemmBiasTailInf checks that the masked k%4 tail of the SIMD kernels
 // does not turn an infinity in the overlapping reload into NaN (0*Inf):
-// the result must be +Inf as with the Go tiles.
+// the result must be +Inf as with the Go tiles. (That is the NEON tail; the
+// masked k%8 step of the AVX2 kernels reloads nothing, and must give +Inf
+// too.)
 func TestGemmBiasTailInf(t *testing.T) {
 	t.Parallel()
 
@@ -369,8 +372,8 @@ func TestGemmBiasTailInf(t *testing.T) {
 					b[i] = 1
 				}
 
-				// Element k-4 is summed in the last full step and reloaded,
-				// masked, by the tail.
+				// On NEON, element k-4 is summed in the last full step and
+				// reloaded, masked, by the tail.
 				for i := range m {
 					a[i*k+k-4] = float32(math.Inf(1))
 				}

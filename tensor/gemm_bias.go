@@ -19,9 +19,10 @@ import "fmt"
 //
 // It is the small-m GEMM of convolutions by im2col (ops.Conv2DPlan), taken
 // with its kernels from algo-transcribe: register-blocked Go tiles that
-// run on every target, js/wasm included, and on arm64 the NEON kernels
-// gemmNEON4x4 and gemmNEON8x1 for k >= 4 and n = 1 or a multiple of 4. The
-// tiles sum in other orders than MatMulTransB, so the two differ in the
+// run on every target, js/wasm included, on arm64 the NEON kernels
+// gemmNEON4x4 and gemmNEON8x1, and on amd64 with AVX2 and FMA the kernels
+// gemmAVX2N4 and gemmAVX2N1, both for k >= 4 and n = 1 or a multiple of 4.
+// The tiles sum in other orders than MatMulTransB, so the two differ in the
 // last bits.
 //
 // Rows run in blocks of gemmBiasBlockM = 8. A product of at least
@@ -118,8 +119,10 @@ func matMulTransBBias(c []float32, ldc int, a, b, bias []float32, m, n, k int) {
 // they run on every target, js/wasm included.
 //
 // On arm64 (without the purego tag) gemmBias first tries the NEON kernels
-// of gemmBiasSIMD, which cover n = 1 and n a multiple of 4 for k >= 4;
-// other shapes fall back to the Go tiles.
+// of gemmBiasSIMD, which cover n = 1 and n a multiple of 4 for k >= 4. On
+// amd64 it tries AVX2 kernels with the same coverage, provided the CPU has
+// AVX2 and FMA, which is detected at run time. Other shapes and CPUs fall
+// back to the Go tiles.
 func gemmBias(c []float32, ldc int, a, b, bias []float32, m, k int) {
 	if gemmBiasSIMD(c, ldc, a, b, bias, m, k) {
 		return
