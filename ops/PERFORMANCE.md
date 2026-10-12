@@ -76,9 +76,21 @@ same command measured conv2d_1 between 8.5 and 13.9 ms; the table is from a seco
 alternating, three rounds, median:
 
 ```bash
-GOOS=linux GOARCH=amd64 go test -c -o ops.test ./ops   # and -tags purego, and ./tensor
-docker run --rm --platform linux/amd64 -v "$PWD:/t:ro" debian:bookworm-slim \
-    /t/ops.test -test.run '^$' -test.bench 'Conv2DPlanBasicPitch|Conv2DBasicPitch|WhistleStem' -test.benchmem
+# algo-tensor: ops and tensor, each with AVX2 and with the Go tiles (purego)
+GOOS=linux GOARCH=amd64 go test -c -o ops.test ./ops
+GOOS=linux GOARCH=amd64 go test -c -tags purego -o ops-go.test ./ops
+GOOS=linux GOARCH=amd64 go test -c -o tensor.test ./tensor
+GOOS=linux GOARCH=amd64 go test -c -tags purego -o tensor-go.test ./tensor
+# nn @ 58c8332, in an algo-transcribe checkout; copy the binaries next to the ones above
+GOOS=linux GOARCH=amd64 go test -c -o nn.test ./nn
+GOOS=linux GOARCH=amd64 go test -c -tags purego -o nn-go.test ./nn
+
+run() { docker run --rm --platform linux/amd64 -v "$PWD:/t:ro" debian:bookworm-slim "$@"; }
+for v in "" -go; do  # alternate the variants, three rounds
+    run /t/ops$v.test -test.run '^$' -test.bench 'Conv2DPlanBasicPitch|Conv2DBasicPitch|WhistleStem' -test.benchmem
+    run /t/tensor$v.test -test.run '^$' -test.bench 'MatMulTransBBias' -test.benchmem
+    run /t/nn$v.test -test.run '^$' -test.bench 'Conv2DWindow|Gemm' -test.benchmem
+done
 ```
 
 **Not a real x86 measurement**: measured on 2026-10-12 in `debian:bookworm-slim` under Docker Desktop's x86 emulation
