@@ -18,7 +18,7 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332; a numerics change on
                           AVX2 machines)
 1.4                       (done, after 1.2; bit-exact, by the user's decision on 2026-10-12)
-→ release v0.4.0 (1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
+→ release v0.4.0 (tagged at e4f3f89: 1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
 ```
 
 ## Phase 1: Fast small-channel convolution
