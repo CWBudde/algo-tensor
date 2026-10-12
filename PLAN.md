@@ -8,10 +8,13 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 ## Dependencies and sequencing
 
 ```
-1.1                       (now)
-1.2                       (after 1.1 merges and algo-transcribe PR #9, its PLAN 4.2, merges)
-→ release v0.2.0 (additive: no golden hash changes); algo-transcribe then drops its own kernels (its PLAN 5.1)
-1.3                       (after v0.2.0; a numerics change, released as v0.3.0)
+1.1                       (done)
+→ release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe then drops its own
+  kernels (its PLAN 5.1)
+1.2                       (after algo-transcribe PR #9, its PLAN 4.2, merges)
+1.3                       (done, after v0.2.0; a numerics change)
+→ release v0.3.0
+1.4                       (after 1.2; a numerics change)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -79,7 +82,7 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       the AVX2 kernel was not selected; `just test-amd64` passes. Benchmarks on linux/amd64 next to 1.1's in
       `ops/PERFORMANCE.md` (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all
       there is). Update the README kernel table. Existing golden hashes must not change.
-- [ ] 1.3 `route-existing-ops` — A numerics change, after v0.2.0: route `ops.Conv2D` with groups = 1 through
+- [x] 1.3 `route-existing-ops` — A numerics change, after v0.2.0: route `ops.Conv2D` with groups = 1 through
       `Conv2DPlan`'s im2col and `MatMulTransBBias` path (still allocating its output, as today), and give
       `tensor.MatMulTransB` on amd64 a register-blocked AVX2 + FMA kernel in place of one `DotProduct` per output
       (reusing 1.2's kernels where the layout allows). Do each only where `ops_bench_test.go` shows a gain on
@@ -87,3 +90,27 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       in the same commit and describe in the commit message and PR which kernels change, on which configurations, and
       by how much against the previous output (max abs/relative difference on the golden cases, within the pinned
       `KernelTolerances`); release as v0.3.0. Update MIGRATION.md's behaviour column.
+      Done, the `Conv2D` half only: the `MatMulTransB` AVX2 half moved to 1.4, after 1.2, by the user's decision on
+      2026-10-12. `Conv2D` with groups = 1 builds a `Conv2DPlan` per call and runs each batch image through its raw-slice
+      runner (`ForwardRows` = check + `run`, bits and 0 allocs kept); groups > 1 and the old path (`conv2DDirect`, the
+      tests' reference) unchanged. It routes only where `BenchmarkConv2DRouting` (90 shapes) gained on every shape:
+      k = kh·kw·inC ≥ 4, batch·outH·outW ≥ 64, outC ≤ 16·k, and not on amd64, where `MatMulTransBBias` has only Go tiles
+      and the plan lost on most routed shapes under Docker's x86 emulation (go-whistle's stem chunk 2.0× slower with
+      AVX2; no real x86 at hand). One worker on an Apple M5 Pro: the basic-pitch window 291.5 → 14.0 ms, go-whistle's
+      stem 9.51 → 3.93 ms, its 8-frame chunk 235 → 116 µs; js/wasm 741 → 91 ms and 78.6 → 26.2 ms; 5 more allocations
+      per call. Only the `Conv2D` golden hashes changed, on arm64/neon and arm64/go (to `ca4adf10951d3251`) and wasm/go
+      (`d6b681f444405320`); amd64/avx2 and amd64/go keep go-whistle's bits. Golden case, groups = 1 part: max |Δ|
+      9.5 × 10⁻⁷ and max |Δ|/|old| 1.0 × 10⁻³ (at an output of 7 × 10⁻⁵) on arm64, 1.9 × 10⁻⁶ and 8.5 × 10⁻⁴ on
+      js/wasm, within the unchanged `{2e-4, 2e-4}`. Found: the plan multiplies the zero padding by the weights, so an
+      infinite weight that only meets padding gives NaN where the per-pixel path stays finite (pinned in a test). Gap:
+      `Conv2D` on amd64 stays on the per-pixel path until 1.2's kernels can be measured on real x86; routing it there
+      is a numerics change of its own.
+- [ ] 1.4 `matmul-transb-avx2` — A numerics change, after 1.2: give `tensor.MatMulTransB` on amd64 a register-blocked
+      AVX2 + FMA kernel in place of one `DotProduct` per output (reusing 1.2's kernels where the layout allows), only
+      where `ops_bench_test.go` shows a gain on go-whistle's and go-pocket-tts' shapes, and report the numbers before
+      and after (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all there is).
+      `Linear`, `MatMul`, `Conv1D` and `ConvTranspose1D` run through it, so the hashes of what builds on it can move too.
+      Update `golden_hashes_test.go` in the same commit and describe in the commit message and PR which kernels change,
+      on which configurations, and by how much against the previous output (max abs/relative difference on the golden
+      cases, within the pinned `KernelTolerances`); release as a new minor version. Update MIGRATION.md's behaviour
+      column.
