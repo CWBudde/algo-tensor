@@ -14,9 +14,12 @@ import "testing"
 // js/wasm under Node. The kernels both projects have gave the same hashes in
 // both, on every configuration both cover. goldenTranscribe holds
 // algo-tensor's own hashes for the kernels taken from algo-transcribe nn @
-// 21ad164 (golden_cases_transcribe_test.go), printed the same way here on
-// every configuration but amd64/avx2: there MatMulTransBBias runs the Go
-// tiles, with the amd64/go bits, until PLAN.md 1.2 gives it AVX2 kernels.
+// 21ad164 (golden_cases_transcribe_test.go), printed the same way here;
+// amd64/avx2 was added with nn's AVX2 kernels @ 58c8332 (PLAN.md 1.2). On
+// the shapes those kernels take, MatMulTransBBias gave nn @ 58c8332's bits
+// (checked once with a throwaway module). On the others it runs the 4×4 Go
+// tile with nn @ 21ad164's bits, where nn @ 58c8332 switched amd64 to the
+// 4×2 tile: of these cases only 13x6x7 differs from that commit.
 func TestGoldenHashes(t *testing.T) {
 	cfg := goldenConfig()
 
