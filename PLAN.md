@@ -13,6 +13,8 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
   kernels (its PLAN 5.1)
 1.3                       (done, after v0.2.0; a numerics change)
 → release v0.3.0
+→ release v0.3.1 (tagged at f4a4dbc: #10, a bit-exact `Linear` over cache-sized weight panels with an AVX2 kernel; v0.3.0
+  plus #10 only, without 1.2)
 1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332; a numerics change on
                           AVX2 machines)
 1.4                       (after 1.2; a numerics change)
