@@ -2,8 +2,9 @@
 
 Open work for `algo-tensor`. Each checkbox is one pull request, written to be picked up by a headless session
 (ccbatch): the task text is the whole first paragraph of the item, so it stays self-contained. When an item is done,
-tick it and append a one-line note with what was covered, the resulting numbers and any deliberate gap. `PLAN.md`
-references inside copied code comments still mean go-whistle's plan (see AGENTS.md).
+tick it and append a one-line note with what was covered, the resulting numbers and any deliberate gap; a declined
+item is marked `[-]`, keeps its text and says why. `PLAN.md` references inside copied code comments still mean
+go-whistle's plan (see AGENTS.md).
 
 ## Dependencies and sequencing
 
@@ -264,15 +265,15 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
       tile. Gaps: the stem stays on NEON (4.7 against 3.6 ms on SME; the check after each block's stores costs about a
       quarter on such blocks, but checking once per panel would change 2.1's guard); up to 4 MiB of scratch per plan and
       worker; measured on an M5 Pro under a load of 2.4–4.4, not on an M4.
-- [ ] 2.3 `sme-fast-gemm` — A numerics change, only after the user decides on it: an SME kernel with one FMA chain per
-      output, 32×32 output blocks over the four tiles (two A and two B vectors per k step, four `FMOPA`s), for
-      `MatMulTransBBias` on SME2 machines. In the spike it ran FlowLM's FFN in 0.55 ms against 0.96 ms for the
-      bit-exact kernel and in_proj in 0.40 against 0.52 ms; it ties on the smaller shapes. It moves the arm64 bits on
-      SME machines only, so the golden hashes would depend on the CPU within arm64/neon: add an arm64/sme
-      configuration to `golden_hashes_test.go`, say in the commit and PR which kernels change and by how much
-      (within the pinned `KernelTolerances`), and release it as a new minor version.
-      Declined (2026-10-13), by the user's decision: the shipped bit-exact kernel runs FlowLM's FFN in 0.64 ms and
-      in_proj in 0.45 ms (v0.5.0, after 2.2's four-row reduction), against the spike's 0.55 and 0.40 ms for this
-      kernel, so it would gain about 10–15 % on the large products and nothing on the small ones, in exchange for
-      arm64/sme golden hashes that depend on the CPU and that CI cannot check (GitHub's macOS runners have no SME).
-      Phase 2 ends with 2.2; reopen this if SME machines become a target where that gain matters.
+- [-] 2.3 `sme-fast-gemm` — Declined (2026-10-13), see the note below. A numerics change, only after the user
+  decides on it: an SME kernel with one FMA chain per output, 32×32 output blocks over the four tiles (two A and two
+  B vectors per k step, four `FMOPA`s), for `MatMulTransBBias` on SME2 machines. In the spike it ran FlowLM's FFN in
+  0.55 ms against 0.96 ms for the bit-exact kernel and in_proj in 0.40 against 0.52 ms; it ties on the smaller
+  shapes. It moves the arm64 bits on SME machines only, so the golden hashes would depend on the CPU within
+  arm64/neon: add an arm64/sme configuration to `golden_hashes_test.go`, say in the commit and PR which kernels
+  change and by how much (within the pinned `KernelTolerances`), and release it as a new minor version.
+  Declined (2026-10-13), by the user's decision: the shipped bit-exact kernel runs FlowLM's FFN in 0.64 ms and
+  in_proj in 0.45 ms (v0.5.0, after 2.2's four-row reduction), against the spike's 0.55 and 0.40 ms for this
+  kernel, so it would gain about 10–15 % on the large products and nothing on the small ones, in exchange for
+  arm64/sme golden hashes that depend on the CPU and that CI cannot check (GitHub's macOS runners have no SME).
+  Phase 2 ends with 2.2; reopen this if SME machines become a target where that gain matters.
