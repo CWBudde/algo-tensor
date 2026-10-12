@@ -21,7 +21,7 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 → release v0.4.0 (tagged at e4f3f89: 1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
 2.1                       (done; bit-exact)
 2.2                       (done; bit-exact)
-→ release (2.1 and 2.2 move no bits, so a minor version for the speed-up)
+→ release v0.5.0 (tagged at b9afdfb, the merge of #15: 2.1 and 2.2 move no bits, a minor version for the speed-up)
 2.3                       (only after the user decides on it; a numerics change on SME machines)
 ```
 
