@@ -104,9 +104,13 @@ func linearSpecials(x, w, bias []float32, batch, in, out int) {
 			wr[p] = vals[(i+2)%len(vals)]
 		}
 
-		// NaN against NaN at one position: the result's payload shows which
-		// operand the FMA took first.
-		xr[in/2] = nanX
+		// NaN against NaN in the first three tokens (one group of the amd64
+		// kernel): the result's payload shows which operand the FMA took
+		// as its second source.
+		for b := range min(3, batch) {
+			x[b*in+in/2] = math.Float32frombits(0x7fc00010 + uint32(b))
+		}
+
 		wr[in/2] = nanW
 	}
 

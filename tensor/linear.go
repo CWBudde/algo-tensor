@@ -101,9 +101,3 @@ func linearDots(y, x, w []float32, in, out, b0, b1, p0, p1 int) {
 		}
 	}
 }
-
-// linearPanel computes the outputs of tokens [b0, b1) and weight rows
-// [p0, p1).
-func linearPanel(y, x, w []float32, in, out, b0, b1, p0, p1 int) {
-	linearDots(y, x, w, in, out, b0, b1, p0, p1)
-}
