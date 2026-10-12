@@ -47,19 +47,14 @@ var linearSweepIns = []int{
 	255, 768, 1024, 1152, 2624,
 }
 
-// linearSweepBatches are the rows of x.
+// linearSweepBatches are the rows of x, around the amd64 kernel's group
+// of three tokens.
 var linearSweepBatches = []int{0, 1, 2, 3, 4, 5, 7, 8, 17}
 
-// linearSweepPanel is the number of weight rows Linear runs every token
-// over at once, for in values per row.
-func linearSweepPanel(in int) int {
-	return min(510, max(3, (1<<16)/max(in, 1)/3*3))
-}
-
-// linearSweepOuts are 1–9 (around the multi-output kernel's group of
-// three) and the outputs just below, at and above one and two panels.
+// linearSweepOuts are 1–9 and the outputs just below, at and above one
+// and two panels.
 func linearSweepOuts(in int) []int {
-	p := linearSweepPanel(in)
+	p := linearPanelRows(in)
 
 	return []int{1, 2, 3, 4, 5, 6, 7, 8, 9, p - 1, p, p + 1, 2*p - 1, 2*p + 2}
 }
