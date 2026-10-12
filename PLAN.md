@@ -11,10 +11,12 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.1                       (done)
 → release v0.2.0 (tagged after 1.1, at b33d487; additive: no golden hash changes); algo-transcribe then drops its own
   kernels (its PLAN 5.1)
-1.2                       (after algo-transcribe PR #9, its PLAN 4.2, merges)
 1.3                       (done, after v0.2.0; a numerics change)
 → release v0.3.0
+1.2                       (after algo-transcribe PR #9, its PLAN 4.2, merges)
+→ release v0.3.1 (additive: no golden hash changes)
 1.4                       (after 1.2; a numerics change)
+→ release v0.4.0
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -81,7 +83,7 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       a test that fails, not skips, when the `CI` environment variable is set and the CPU reports AVX2 and FMA but
       the AVX2 kernel was not selected; `just test-amd64` passes. Benchmarks on linux/amd64 next to 1.1's in
       `ops/PERFORMANCE.md` (name the CPU; Rosetta under Docker is not a real x86 measurement, say so if that is all
-      there is). Update the README kernel table. Existing golden hashes must not change.
+      there is). Update the README kernel table. Existing golden hashes must not change. Release as v0.3.1.
 - [x] 1.3 `route-existing-ops` — A numerics change, after v0.2.0: route `ops.Conv2D` with groups = 1 through
       `Conv2DPlan`'s im2col and `MatMulTransBBias` path (still allocating its output, as today), and give
       `tensor.MatMulTransB` on amd64 a register-blocked AVX2 + FMA kernel in place of one `DotProduct` per output
@@ -112,5 +114,5 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       `Linear`, `MatMul`, `Conv1D` and `ConvTranspose1D` run through it, so the hashes of what builds on it can move too.
       Update `golden_hashes_test.go` in the same commit and describe in the commit message and PR which kernels change,
       on which configurations, and by how much against the previous output (max abs/relative difference on the golden
-      cases, within the pinned `KernelTolerances`); release as a new minor version. Update MIGRATION.md's behaviour
+      cases, within the pinned `KernelTolerances`); release as v0.4.0. Update MIGRATION.md's behaviour
       column.
