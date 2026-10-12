@@ -8,7 +8,8 @@
 // MatMulTransBBias tests (nil bias, panics, empty products, allocations, worker counts)
 // and BenchmarkMatMulTransBBias, after BenchmarkGemm, added.
 // algo-tensor change: BenchmarkMatMulTransBBias also runs BenchmarkMatMulTransB's shapes
-// with n a multiple of 4 (PLAN.md 2.1).
+// with n a multiple of 4, and the allocation test skips the SME path's shapes under the
+// race detector (PLAN.md 2.1).
 
 package tensor
 
@@ -579,6 +580,13 @@ func TestMatMulTransBBiasAllocs(t *testing.T) {
 		b := randGemmData(rng, n*k)
 		bias := randGemmData(rng, n)
 		c := make([]float32, m*n)
+
+		// The SME path's scratch comes from a sync.Pool, which drops items at
+		// random under the race detector; TestMatMulTransBBiasSMEAllocs checks
+		// it without.
+		if raceEnabled && smeTakes(m, n, k) {
+			continue
+		}
 
 		withWorkers(t, 1, func() {
 			for _, bs := range [][]float32{bias, nil} {

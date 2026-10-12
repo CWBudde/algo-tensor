@@ -8,3 +8,6 @@ package tensor
 // matMulTransBBiasSME has no kernel on this target and always leaves the
 // product to gemmBias.
 func matMulTransBBiasSME(_ []float32, _ int, _, _, _ []float32, _, _, _ int) bool { return false }
+
+// smeTakes reports whether gemmSME runs the product m×n×k: never here.
+func smeTakes(_, _, _ int) bool { return false }

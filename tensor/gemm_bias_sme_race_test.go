@@ -1,4 +1,4 @@
-//go:build darwin && arm64 && !purego && race
+//go:build race
 
 // algo-tensor's own, not in go-whistle or go-pocket-tts: whether the race
 // detector is on (PLAN.md 2.1).
