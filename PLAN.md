@@ -18,7 +18,11 @@ references inside copied code comments still mean go-whistle's plan (see AGENTS.
 1.2                       (done, after algo-transcribe PR #9, its PLAN 4.2, merged at 58c8332; a numerics change on
                           AVX2 machines)
 1.4                       (done, after 1.2; bit-exact, by the user's decision on 2026-10-12)
-→ release v0.4.0 (1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
+→ release v0.4.0 (tagged at e4f3f89: 1.2's amd64 numerics change, which reaches none of the consumers' calls, plus 1.4)
+2.1                       (bit-exact: no golden hash may change)
+2.2                       (after 2.1; bit-exact)
+→ release (2.1 and 2.2 move no bits, so a minor version for the speed-up)
+2.3                       (only after the user decides on it; a numerics change on SME machines)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -148,3 +152,80 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       memory (30 GB/s for 4 MiB of B); and default worker counts, not measurable on the loaded VM. Gap: the Mimi conv
       tile, where A (7 MiB of kernel rows) is much larger than B, reads A once per panel of B. The plan text named a
       numerics change and 1.2's kernels; the user chose the bit-exact kernel on 2026-10-12.
+
+## Phase 2: SME2 on Apple M4 and later
+
+Apple's M4 and M5 have SME2 (`hw.optional.arm.FEAT_SME2`, 512-bit streaming vectors, so four 16×16 fp32 ZA tiles fed
+by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.27.1, one worker) found:
+
+- **Bit-exact is possible.** Replaying `gemmNEON4x4`'s arithmetic, one ZA tile per k%4 lane, gave `MatMulTransBBias`'s
+  arm64 bits on 7,040 shapes and on special values (Inf, NaN, −0, subnormals). The layout: A in 16-row and B in
+  16-column panels, k-major, kp = 4⌈k/4⌉ steps; step p < 4⌊k/4⌋ is column p, and the tail group replays
+  `gemmNEON4x4`'s reload of columns k−4..k−1 with the already-summed lanes zeroed in both operands (so a lane adds
+  fma(+0, +0, acc), as NEON does); tile t accumulates the steps p ≡ t (mod 4) from +0, and each output is
+  ((t0 + t1) + (t2 + t3)) + bias, the `FADDP` order of `REDUCE4`.
+- **It is fast on large products only.** Against `MatMulTransBBias` on NEON: go-pocket-tts' FlowLM in_proj
+  (64×3072×1024) 3.61 → 0.52 ms, its FFN (64×4096×1024) 4.67 → 0.96 ms, `linear_16x1024x1024` 278 → 37 µs,
+  go-whistle's FFN (375×2048×512) 6.99 → 1.23 ms; the 22–34 µs shapes (conv tile, attention scores and values) tie or
+  lose, and the basic-pitch conv GEMMs lost 2.5–7× because the spike packed A and reduced ZA in Go (packing alone
+  took 70 % of the time on 15136×32×200, the kernel 8 %). Split by rows, the SME units scale: 616 GFLOPS with one
+  worker, 1,132 with 2, 1,622 with 4, 2,319 with 8, 1,891 with 15.
+- **Darwin loses Z registers on signals.** When a signal handler returns while the thread is in streaming mode, the
+  kernel zeroes lanes 4–15 of every Z register; ZA, the P registers and SVCR survive (reproduced in C, so not Go's
+  doing). Go's preemption (SIGURG) and profiler (SIGPROF) signals hit SME kernels constantly: unguarded, the bit sweep
+  failed on every run and passed with `GODEBUG=asyncpreemptoff=1`. Guard: load a canary into z31 at the start of each
+  output block, check it once after the block's k loop, and redo the block from a zeroed ZA if it was hit; under a
+  CPU profile, a SIGUSR1 storm, GC and 2× oversubscribed goroutines, 602,242 GEMMs gave 0 wrong results with 42,018
+  redos. One check per k step instead cost 6–12× throughput (the result travels from the SME unit to the core).
+- **Toolchain.** Go's assembler has no SME mnemonics: emit `WORD`s, each commented with its mnemonic as in
+  `neon_fp.h`, taken from `xcrun clang -c -mcpu=apple-m4 -march=armv9.2-a+sme2` and `xcrun objdump -d` (e.g.
+  `smstart` d503477f, `smstop` d503467f, `zero {za}` c00800ff, `fmopa za0.s, p0/m, p0/m, z0.s, z4.s` 80840000). A C
+  test program must be built with `-mcpu=apple-m4` alone: `-march=armv9.2-a` lets clang emit non-streaming SVE,
+  which Apple's CPUs lack (SIGILL). GitHub's macOS runners have no SME, so the SME tests run on a developer machine
+  only.
+
+- [ ] 2.1 `sme-gemm-bias` — Bit-exact: give `tensor.MatMulTransBBias` on arm64 an SME2 path for the shapes
+      `gemmNEON4x4` takes (k ≥ 4, n a multiple of 4) that gives every output `gemmNEON4x4`'s bits, so no golden hash
+      changes, in new files (`arm64 && !purego`, a header saying they are algo-tensor's own as in `gemm_amd64.go`).
+      Read Phase 2's notes above first: the panel layout with its tail group, the four tiles per 16×16 output block,
+      the reduction order, the signal guard and the `WORD` encodings come from the spike. Select it once at start-up
+      where the CPU reports SME2 (on darwin `syscall.Sysctl("hw.optional.arm.FEAT_SME2")`; use `golang.org/x/sys/cpu`
+      instead if it reports SME2; NEON everywhere else), and only for products where `BenchmarkMatMulTransBBias`
+      (add go-whistle's and go-pocket-tts' `BenchmarkMatMulTransB` shapes with n a multiple of 4) shows a gain: a
+      size threshold, with the smaller products on NEON. Do the whole call in one `SMSTART`/`SMSTOP` per worker: pack
+      A (in assembly, or in Go only if it does not dominate, see the notes) and B into scratch (`MatMulTransBBias` has
+      no plan, so B is packed per call; 0 allocations in steady state, e.g. a `sync.Pool`), and reduce the four tiles,
+      add the bias and store into c with `ldc` in assembly, predicated for m%16 and n%16, instead of dumping ZA to
+      memory. Guard every block: the canary in z31 is checked once after the block's k loop by a compare that redoes
+      the block when any canary lane is zero (the spike's check only caught all lanes zero); after 8 redos of one
+      block finish the call with NEON, which gives the same bits. The `Parallel` split may stay as it is, since every
+      output's bits are independent of it; measure the default worker count against the spike's scaling. Tests: the
+      1.1 sweep and the spike's (k ∈ {4, 5, 6, 7, 8, 9, 49, 200, 297, 672, 936}, n ∈ {4, 8, 12, 16, 20, 32, 36, 64},
+      m 1–40, ldc = n and n+3, a guard element after the output) comparing the SME path with `gemmNEON4x4` bit for
+      bit, with the threshold lowered by a test hook so small shapes reach SME; special values; a stress test that
+      runs SME GEMMs on 2×GOMAXPROCS goroutines for a few seconds under a CPU profile, a SIGUSR1 storm and
+      `runtime.GC` and checks every bit; the redo and the NEON fallback, forced by a test hook that clobbers the
+      canary; a test that fails, not skips, under `CI` when the CPU reports SME2 but the SME path was not selected,
+      as `TestGemmAVX2Selected`. All tests pass with and without `-tags purego`, under `-race`, `just test-amd64` and
+      the js/wasm build; `TestGoldenHashes` passes unchanged. Record the benchmarks before and after in
+      `ops/PERFORMANCE.md` (date, CPU, Go version, one worker and the default), and update the README kernel table.
+- [ ] 2.2 `sme-conv2d-plan` — Bit-exact, after 2.1: run `ops.Conv2DPlan`'s GEMM on 2.1's SME kernel where 2.1
+      selects SME and the plan's shape is one `gemmNEON4x4` takes (k ≥ 4, outC a multiple of 4; outC = 1 stays on
+      `gemmNEON8x1`), so no golden hash changes. Today the plan calls `tensor.MatMulTransBBias` on 8-position im2col
+      blocks, far below 2.1's threshold. Instead: pack the weights once into SME panels in `NewConv2DPlan`, have
+      im2col write A directly in the 16-row k-major panel layout (with the tail group), and run whole panels through
+      the kernel, which needs an unexported entry point in `tensor` for prepacked operands, or an exported one only
+      if `ops` cannot reach it otherwise (no breaking change). Keep `Forward` and `ForwardRows` at 0 allocations and
+      bit-identical for any chunking and worker count. Use it only where `BenchmarkConv2DPlanBasicPitch`,
+      `BenchmarkConv2DPlanWhistleStem` and `BenchmarkConv2DRouting` show a gain (the spike: the kernel took 8 % of a
+      basic-pitch GEMM, packing the rest; the outC = 8 layer fills half a tile, so it may stay on NEON) and report
+      the numbers before and after in `ops/PERFORMANCE.md`. `ops.Conv2D` with groups = 1 runs through the plan, so
+      its numbers move too: report them, and rerun `BenchmarkConv2DRouting` to see whether the routing rule should
+      change (a routing change is a numerics change of its own; propose it, do not make it).
+- [ ] 2.3 `sme-fast-gemm` — A numerics change, only after the user decides on it: an SME kernel with one FMA chain per
+      output, 32×32 output blocks over the four tiles (two A and two B vectors per k step, four `FMOPA`s), for
+      `MatMulTransBBias` on SME2 machines. In the spike it ran FlowLM's FFN in 0.55 ms against 0.96 ms for the
+      bit-exact kernel and in_proj in 0.40 against 0.52 ms; it ties on the smaller shapes. It moves the arm64 bits on
+      SME machines only, so the golden hashes would depend on the CPU within arm64/neon: add an arm64/sme
+      configuration to `golden_hashes_test.go`, say in the commit and PR which kernels change and by how much
+      (within the pinned `KernelTolerances`), and release it as a new minor version.
