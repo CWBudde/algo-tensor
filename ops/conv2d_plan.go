@@ -12,6 +12,7 @@
 // algo-tensor change: ForwardRows may split its rows over the SetConvWorkers goroutines, each
 // with its own im2col scratch; the default stays sequential and allocation-free.
 // algo-tensor change: the GEMM is tensor.MatMulTransBBias with ldc = outC instead of nn's gemm.
+// algo-tensor change: ForwardRows checks its arguments, then calls run, which works on raw slices.
 
 package ops
 
@@ -209,15 +210,23 @@ func (c *Conv2DPlan) ForwardRows(dst, x *tensor.Tensor, r0, r1 int) error {
 		return err
 	}
 
-	out, in := dst.RawData(), x.RawData()
+	c.run(dst.RawData(), x.RawData(), r0, r1)
 
+	return nil
+}
+
+// run computes output rows [r0, r1) into out, one whole output image
+// (outH·outW·outC values), from in, one input image (inH·inW·inC values),
+// split over the SetConvWorkers goroutines as ForwardRows describes. The
+// caller checks the sizes and the rows.
+func (c *Conv2DPlan) run(out, in []float32, r0, r1 int) {
 	n := r1 - r0
 
 	workers := min(getConvWorkers(), n)
 	if workers <= 1 {
 		c.rows(out, in, c.cols[0], r0, r1)
 
-		return nil
+		return
 	}
 
 	for len(c.cols) < workers {
@@ -242,8 +251,6 @@ func (c *Conv2DPlan) ForwardRows(dst, x *tensor.Tensor, r0, r1 int) error {
 
 	c.rows(out, in, c.cols[0], r0, start(1))
 	wg.Wait()
-
-	return nil
 }
 
 // check validates the arguments of ForwardRows without allocating unless

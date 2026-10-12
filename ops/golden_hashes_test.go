@@ -5,7 +5,11 @@ package ops
 // tensor.SetWorkers(1) and SetConvWorkers(0), then at tensor.SetWorkers(4) and SetConvWorkers(3).
 
 // goldenWhistle holds what go-whistle internal/ops @ 8926ee3 gave for
-// commonGoldenCases and whistleGoldenCases, by goldenConfig and case.
+// commonGoldenCases and whistleGoldenCases, by goldenConfig and case, except
+// Conv2D on arm64/neon, arm64/go and wasm/go: from v0.3.0 on (PLAN 1.3,
+// regenerated on 2026-10-12) its groups = 1 convolution runs through
+// Conv2DPlan there, within KernelTolerance("conv2d") of go-whistle's bits.
+// On amd64 Conv2D still gives go-whistle's bits.
 var goldenWhistle = map[string]map[string][2]string{
 	"amd64/avx2": {
 		"Attention":     {"553e9a074dce474a", "553e9a074dce474a"},
@@ -28,7 +32,7 @@ var goldenWhistle = map[string]map[string][2]string{
 		"CausalMask":    {"b793ce8dc7b262c8", "b793ce8dc7b262c8"},
 		"Conv1D":        {"adbfda064ee2ab08", "adbfda064ee2ab08"},
 		"Conv1DLeftPad": {"0de905657ea47748", "0de905657ea47748"},
-		"Conv2D":        {"7fe7430801e7cf37", "7fe7430801e7cf37"},
+		"Conv2D":        {"ca4adf10951d3251", "ca4adf10951d3251"},
 		"RoPE":          {"2f722fc48112d1c6", "2f722fc48112d1c6"},
 	},
 	"arm64/neon": {
@@ -36,7 +40,7 @@ var goldenWhistle = map[string]map[string][2]string{
 		"CausalMask":    {"b793ce8dc7b262c8", "b793ce8dc7b262c8"},
 		"Conv1D":        {"399ac9bfc51c0f73", "399ac9bfc51c0f73"},
 		"Conv1DLeftPad": {"c1acc97b0ad9134f", "c1acc97b0ad9134f"},
-		"Conv2D":        {"7fe7430801e7cf37", "7fe7430801e7cf37"},
+		"Conv2D":        {"ca4adf10951d3251", "ca4adf10951d3251"},
 		"RoPE":          {"2f722fc48112d1c6", "2f722fc48112d1c6"},
 	},
 	"wasm/go": {
@@ -44,7 +48,7 @@ var goldenWhistle = map[string]map[string][2]string{
 		"CausalMask":    {"b793ce8dc7b262c8", "b793ce8dc7b262c8"},
 		"Conv1D":        {"0cac612261e626e9", "0cac612261e626e9"},
 		"Conv1DLeftPad": {"ef3218141f4a266f", "ef3218141f4a266f"},
-		"Conv2D":        {"21a097322acd1907", "21a097322acd1907"},
+		"Conv2D":        {"d6b681f444405320", "d6b681f444405320"},
 		"RoPE":          {"430e19c1a47fa3db", "430e19c1a47fa3db"},
 	},
 }

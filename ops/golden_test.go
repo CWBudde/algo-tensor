@@ -17,6 +17,8 @@ import (
 // goldenTranscribe; Conv2DPlan gave the same bits as algo-transcribe nn's
 // Conv2D @ 21ad164 on the same inputs (checked once with a throwaway module
 // on darwin/arm64 and linux/amd64, with and without purego, and on js/wasm).
+// Conv2D's hashes on arm64 and wasm are algo-tensor's since v0.3.0, where its
+// groups = 1 convolution runs through Conv2DPlan (PLAN 1.3).
 func TestGoldenHashes(t *testing.T) {
 	cfg := goldenConfig()
 
@@ -32,7 +34,7 @@ func TestGoldenHashes(t *testing.T) {
 		table map[string]map[string][2]string
 		cases []goldenCase
 	}{
-		{"go-whistle @ 8926ee3", goldenWhistle, append(commonGoldenCases(), whistleGoldenCases()...)},
+		{"go-whistle @ 8926ee3 (Conv2D on arm64 and wasm: algo-tensor v0.3.0)", goldenWhistle, append(commonGoldenCases(), whistleGoldenCases()...)},
 		{"go-pocket-tts @ 9faba38", goldenPocket, append(commonGoldenCases(), pocketGoldenCases()...)},
 		{"algo-tensor, algo-transcribe's kernels @ 21ad164", goldenTranscribe, transcribeGoldenCases()},
 	}

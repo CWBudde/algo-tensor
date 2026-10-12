@@ -13,23 +13,31 @@ a grep of `tensor.X` / `ops.X` in every tracked `.go` file that imports the pack
 
 Importers: `internal/cq`, `internal/decoder`, `internal/encoder`, `internal/needle`, `internal/weights` (tests only).
 
-| go-whistle identifier                    | used in                             | algo-tensor identifier | behaviour                     |
-| ---------------------------------------- | ----------------------------------- | ---------------------- | ----------------------------- |
-| `internal/tensor`.`Axpy`                 | decoder, needle                     | `tensor.Axpy`          | same code                     |
-| `internal/tensor`.`DotProduct`           | decoder, needle                     | `tensor.DotProduct`    | same code                     |
-| `internal/tensor`.`MatMulTransB`         | cq, needle                          | `tensor.MatMulTransB`  | same code                     |
-| `internal/tensor`.`New`                  | encoder                             | `tensor.New`           | same code                     |
-| `internal/tensor`.`Parallel`             | cq, encoder, needle                 | `tensor.Parallel`      | same code                     |
-| `internal/tensor`.`SetWorkers`           | cq, encoder, needle, weights (test) | `tensor.SetWorkers`    | same code                     |
-| `internal/tensor`.`Tensor` (and methods) | encoder                             | `tensor.Tensor`        | same code                     |
-| `internal/tensor`.`Workers`              | cq, encoder, needle, weights (test) | `tensor.Workers`       | same code, default GOMAXPROCS |
-| `internal/ops`.`Conv2D`                  | encoder                             | `ops.Conv2D`           | same code                     |
-| `internal/ops`.`Conv2DParams`            | encoder                             | `ops.Conv2DParams`     | same code                     |
-| `internal/ops`.`SamePadding`             | encoder                             | `ops.SamePadding`      | same code                     |
+| go-whistle identifier                    | used in                             | algo-tensor identifier | behaviour                                                                                                                         |
+| ---------------------------------------- | ----------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/tensor`.`Axpy`                 | decoder, needle                     | `tensor.Axpy`          | same code                                                                                                                         |
+| `internal/tensor`.`DotProduct`           | decoder, needle                     | `tensor.DotProduct`    | same code                                                                                                                         |
+| `internal/tensor`.`MatMulTransB`         | cq, needle                          | `tensor.MatMulTransB`  | same code                                                                                                                         |
+| `internal/tensor`.`New`                  | encoder                             | `tensor.New`           | same code                                                                                                                         |
+| `internal/tensor`.`Parallel`             | cq, encoder, needle                 | `tensor.Parallel`      | same code                                                                                                                         |
+| `internal/tensor`.`SetWorkers`           | cq, encoder, needle, weights (test) | `tensor.SetWorkers`    | same code                                                                                                                         |
+| `internal/tensor`.`Tensor` (and methods) | encoder                             | `tensor.Tensor`        | same code                                                                                                                         |
+| `internal/tensor`.`Workers`              | cq, encoder, needle, weights (test) | `tensor.Workers`       | same code, default GOMAXPROCS                                                                                                     |
+| `internal/ops`.`Conv2D`                  | encoder                             | `ops.Conv2D`           | groups = 1 runs `Conv2DPlan`'s im2col + `MatMulTransBBias` (not on amd64); last bits differ from go-whistle's (v0.3.0), see below |
+| `internal/ops`.`Conv2DParams`            | encoder                             | `ops.Conv2DParams`     | same code                                                                                                                         |
+| `internal/ops`.`SamePadding`             | encoder                             | `ops.SamePadding`      | same code                                                                                                                         |
 
 Every declaration of go-whistle's two packages is in the module unchanged (compared declaration by declaration on the
 comment-stripped syntax trees), except `ops.KernelTolerances`, which has go-pocket-tts' three extra entries
 (`layer_norm`, `mlp`, `convtranspose1d`) again. go-whistle does not use it outside `internal/ops`.
+
+From v0.3.0 on (PLAN 1.3), `ops.Conv2D` also differs: a groups = 1 convolution with a GEMM depth kh·kw·inC of at least
+4, at least 64 output positions over the batch and at most 16 out channels per unit of depth runs through a
+`Conv2DPlan` built for the call, im2col plus `tensor.MatMulTransBBias`, instead of one `Axpy` per input tap. That
+includes go-whistle's stem conv (3 × 3, 1 → 128), whole or in chunks. Its outputs differ from go-whistle's in the last
+bits on arm64 and js/wasm, within `KernelTolerance("conv2d")` (on the golden case at most 1.9 × 10⁻⁶ absolute); on
+amd64, where `MatMulTransBBias` has no assembly yet, `Conv2D` keeps go-whistle's code and bits. The depthwise stages
+(groups > 1) do not change. v0.2.0 is the last version with go-whistle's `Conv2D` bits everywhere.
 
 ```sh
 cd go-whistle

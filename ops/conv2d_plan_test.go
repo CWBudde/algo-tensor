@@ -6,6 +6,8 @@
 // algo-tensor change: chunkings of 2, 3 and 7 rows and random partitions; the SetConvWorkers
 // split; errors for permuted and batch-2 shapes, groups and padding; the tests renamed
 // Conv2DPlan…; nn's samePadding, golden and Padding tests left out (ops has its own).
+// algo-tensor change: the reference is conv2DDirect, Conv2D's per-pixel path, since Conv2D
+// itself runs the plan for groups = 1 (PLAN 1.3).
 
 package ops
 
@@ -20,7 +22,7 @@ import (
 )
 
 // planReducedWork reports whether expensive tests should check a subset of
-// the work: under -short and under js/wasm, where Conv2D over a full
+// the work: under -short and under js/wasm, where conv2DDirect over a full
 // basic-pitch layer is slow.
 func planReducedWork() bool {
 	return testing.Short() || runtime.GOARCH == "wasm"
@@ -99,7 +101,7 @@ func assertConv2DTolerance(t *testing.T, got, want []float32) {
 	for i := range got {
 		g, w := float64(got[i]), float64(want[i])
 		if d := math.Abs(g - w); !(d <= tol.Abs+tol.Rel*math.Abs(w)) {
-			t.Fatalf("value %d = %v, Conv2D %v (|Δ| %g > %g)", i, g, w, d, tol.Abs+tol.Rel*math.Abs(w))
+			t.Fatalf("value %d = %v, want %v (|Δ| %g > %g)", i, g, w, d, tol.Abs+tol.Rel*math.Abs(w))
 		}
 	}
 }
@@ -128,12 +130,12 @@ func samePadParams(inH, inW, kh, kw, sh, sw int) Conv2DParams {
 	return Conv2DParams{StrideH: sh, StrideW: sw, PadTop: top, PadBottom: bottom, PadLeft: left, PadRight: right, Groups: 1}
 }
 
-// checkPlanAgainstConv2D runs the plan on every image of x and compares
-// with Conv2D within KernelTolerance("conv2d").
-func checkPlanAgainstConv2D(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv2DParams) {
+// checkPlanAgainstDirect runs the plan on every image of x and compares
+// with conv2DDirect within KernelTolerance("conv2d").
+func checkPlanAgainstDirect(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv2DParams) {
 	t.Helper()
 
-	want, err := Conv2D(x, kernel, bias, p)
+	want, err := conv2DDirect(x, kernel, bias, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func checkPlanAgainstConv2D(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv
 	}
 
 	if h, w, c := plan.OutShape(); int64(h) != want.Dim(1) || int64(w) != want.Dim(2) || int64(c) != want.Dim(3) {
-		t.Fatalf("OutShape() = (%d, %d, %d), Conv2D gives %v", h, w, c, want.Shape())
+		t.Fatalf("OutShape() = (%d, %d, %d), conv2DDirect gives %v", h, w, c, want.Shape())
 	}
 
 	got := make([]float32, 0, want.ElemCount())
@@ -168,12 +170,13 @@ func checkPlanAgainstConv2D(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv
 func TestConv2DPlanGoldenConfig(t *testing.T) {
 	r := &goldenRand{21}
 	x := r.tensor(t, 2, 9, 8, 4)
-	checkPlanAgainstConv2D(t, x, r.tensor(t, 3, 3, 4, 6), r.tensor(t, 6), Conv2DParams{1, 1, 1, 1, 1, 1, 1})
+	checkPlanAgainstDirect(t, x, r.tensor(t, 3, 3, 4, 6), r.tensor(t, 6), Conv2DParams{1, 1, 1, 1, 1, 1, 1})
 }
 
-// TestConv2DPlanMatchesConv2D covers the groups = 1 cases of
-// TestConv2DMatchesReference and explicit padding beyond the kernel.
-func TestConv2DPlanMatchesConv2D(t *testing.T) {
+// TestConv2DPlanMatchesConv2DDirect covers the groups = 1 cases of
+// TestConv2DMatchesReference and explicit padding beyond the kernel,
+// against conv2DDirect: Conv2D runs the plan itself.
+func TestConv2DPlanMatchesConv2DDirect(t *testing.T) {
 	rng := planRNG(14)
 
 	cases := []struct {
@@ -201,7 +204,7 @@ func TestConv2DPlanMatchesConv2D(t *testing.T) {
 				b = planRandTensor(t, rng, tc.o)
 			}
 
-			checkPlanAgainstConv2D(t, x, k, b, tc.p)
+			checkPlanAgainstDirect(t, x, k, b, tc.p)
 		})
 	}
 }
@@ -253,7 +256,7 @@ func (tc planCase) plan(t testing.TB) (*Conv2DPlan, *tensor.Tensor) {
 }
 
 // TestConv2DPlanSameReference runs nn's TestConv2DMatchesReference cases,
-// "same" padding by SamePadding, against Conv2D.
+// "same" padding by SamePadding, against conv2DDirect.
 func TestConv2DPlanSameReference(t *testing.T) {
 	cases := []planCase{
 		{name: "1x1/s1", h: 5, w: 7, c: 3, kh: 1, kw: 1, cout: 4, sh: 1, sw: 1},
@@ -307,7 +310,7 @@ func TestConv2DPlanSameReference(t *testing.T) {
 		tc.seed = uint64(i)
 		t.Run(tc.name, func(t *testing.T) {
 			kernel, bias, x := tc.fixture(t)
-			checkPlanAgainstConv2D(t, x, kernel, bias, tc.params())
+			checkPlanAgainstDirect(t, x, kernel, bias, tc.params())
 		})
 	}
 }
@@ -323,9 +326,9 @@ var basicPitchLayers = []planCase{
 	{name: "conv2d_5", h: 172, w: 88, c: 33, kh: 3, kw: 3, cout: 1, sh: 1, sw: 1, wantH: 172, wantW: 88, wantMACsPerRw: 88 * 297 * 1},
 }
 
-// conv2DRows is Conv2D's output rows [o0, o1) of the single image x: Conv2D
+// conv2DRows is conv2DDirect's output rows [o0, o1) of the single image x: conv2DDirect
 // on the input rows they read, padded where the whole image is and
-// nowhere else, so every output reads the same taps as in Conv2D on x.
+// nowhere else, so every output reads the same taps as on all of x.
 func conv2DRows(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv2DParams, o0, o1 int) []float32 {
 	t.Helper()
 
@@ -342,20 +345,20 @@ func conv2DRows(t *testing.T, x, kernel, bias *tensor.Tensor, p Conv2DParams, o0
 		t.Fatal(err)
 	}
 
-	out, err := Conv2D(crop, kernel, bias, q)
+	out, err := conv2DDirect(crop, kernel, bias, q)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if out.Dim(1) != int64(o1-o0) {
-		t.Fatalf("cropped Conv2D has %d rows, want %d", out.Dim(1), o1-o0)
+		t.Fatalf("cropped conv2DDirect has %d rows, want %d", out.Dim(1), o1-o0)
 	}
 
 	return out.RawData()
 }
 
 // TestConv2DPlanBasicPitchLayers checks the six basic-pitch shapes against
-// Conv2D: all rows, or under reduced work rows at both edges (which see the
+// conv2DDirect: all rows, or under reduced work rows at both edges (which see the
 // top and bottom padding) and in the middle.
 func TestConv2DPlanBasicPitchLayers(t *testing.T) {
 	for i, tc := range basicPitchLayers {
