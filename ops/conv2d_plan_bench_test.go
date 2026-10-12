@@ -3,10 +3,12 @@
 // BenchmarkConv2DBasicPitch for ops.Conv2D on the same layers, both on one worker; the layers
 // are basicPitchLayers of conv2d_plan_test.go; BenchmarkConv2DPlanWhistleStem and
 // BenchmarkConv2DWhistleStem for go-whistle's stem conv added; no BenchmarkConv2DRow.
+// algo-tensor change: go-whistle's stem chunk; BenchmarkConv2DRouting for Conv2D's routing (PLAN 1.3).
 
 package ops
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"testing"
 
@@ -40,10 +42,16 @@ func benchBasicPitchLayers() []benchConvLayer {
 // stem.conv for stage 0 under the Best hypothesis: StrideAll,
 // PadSymmetric) on a 30 s clip: 3000 frames × 80 mels (frontend.Mels),
 // conv 3×3, 1 → 128 channels (stem/w), stride 2, padding 1 on every side,
-// no bias; out 1500 × 40 × 128.
+// no bias; out 1500 × 40 × 128. go-whistle runs it in chunks (stem.chunk
+// @ 98603c6, stemChunk = 8 output frames): "chunk" is one chunk away from
+// the clip's edges, 71 input rows with no padding above or below, out
+// 35 × 40 × 128.
 var benchWhistleStem = []benchConvLayer{{
 	name: "conv", h: 3000, w: 80, c: 1, kh: 3, kw: 3, cout: 128,
 	p: Conv2DParams{StrideH: 2, StrideW: 2, PadTop: 1, PadBottom: 1, PadLeft: 1, PadRight: 1, Groups: 1},
+}, {
+	name: "chunk", h: 71, w: 80, c: 1, kh: 3, kw: 3, cout: 128,
+	p: Conv2DParams{StrideH: 2, StrideW: 2, PadLeft: 1, PadRight: 1, Groups: 1},
 }}
 
 // benchConvSetup returns the layer's random kernel, bias (nil without) and
@@ -144,5 +152,50 @@ func benchConv2D(b *testing.B, layers []benchConvLayer) {
 
 			b.ReportMetric(macs*float64(b.N)/b.Elapsed().Seconds()/1e9, "GMAC/s")
 		})
+	}
+}
+
+// BenchmarkConv2DRouting runs groups = 1 shapes around Conv2D's routing
+// thresholds (planGains) through a Conv2DPlan ("plan", conv2D's
+// conv2DPlanned path, packing included) and the per-pixel path
+// ("direct", conv2DDirect), one worker: images of 4×4, 8×8 and 16×16
+// outputs, GEMM depths k of 1, 2, 3, 4 and 9 (1×1 kernels on k input
+// channels) and 36 (3×3 on 4, "same"), and 1 to 255 out channels, with
+// bias. Run it with -benchtime=0.2s; ops/PERFORMANCE.md has the result.
+func BenchmarkConv2DRouting(b *testing.B) {
+	type shape struct{ hw, kk, c, o int }
+
+	sizes, kernels, outs := []int{4, 8, 16}, [][2]int{{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 9}, {3, 4}}, []int{1, 8, 32, 128, 255}
+	shapes := make([]shape, 0, len(sizes)*len(kernels)*len(outs))
+
+	for _, hw := range sizes {
+		for _, kc := range kernels {
+			for _, o := range outs {
+				shapes = append(shapes, shape{hw, kc[0], kc[1], o})
+			}
+		}
+	}
+
+	for _, s := range shapes {
+		l := benchConvLayer{h: s.hw, w: s.hw, c: s.c, kh: s.kk, kw: s.kk, cout: s.o, p: samePadParams(s.hw, s.hw, s.kk, s.kk, 1, 1), bias: true}
+		name := fmt.Sprintf("out=%dx%d/k=%d/o=%d", s.hw, s.hw, s.kk*s.kk*s.c, s.o)
+
+		for _, path := range []struct {
+			name string
+			path conv2DPath
+		}{{"plan", conv2DPlanned}, {"direct", conv2DPixels}} {
+			b.Run(name+"/"+path.name, func(b *testing.B) {
+				kernel, bias, x := benchConvSetup(b, l)
+
+				b.ReportAllocs()
+
+				for b.Loop() {
+					_, err := conv2D(x, kernel, bias, l.p, path.path)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
