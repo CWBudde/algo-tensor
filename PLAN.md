@@ -97,7 +97,9 @@ assembly. Phase 1 moves that code here so that algo-transcribe, go-whistle and g
       release (v0.3.0, not tagged yet). Only under Docker's x86 emulation (Rosetta), not real x86: the basic-pitch window
       35.4 ms with AVX2 against 201.3 ms with the Go tiles (nn: 35.2 and 98.9 ms with its 4×2 tile), the GEMMs 5.2–8.3×;
       the routing sweep now favours the plan on 21 of the 24 routed shapes. Gaps: the 4×2 amd64 tile (a numerics change
-      of its own), and routing `Conv2D` on amd64, which still needs a real x86 measurement.
+      of its own), and routing `Conv2D` on amd64. On a real Xeon Gold 5520+ (ops/PERFORMANCE.md) all tests pass with
+      `CI=true` and the same amd64/avx2 hashes; the plan runs the window in 24.1 ms with AVX2 (2.4 % behind nn,
+      interleaved) and the routing sweep favours it on 22 of the 24 routed shapes (the two losers: 255 out channels).
 - [x] 1.3 `route-existing-ops` — A numerics change, after v0.2.0: route `ops.Conv2D` with groups = 1 through
       `Conv2DPlan`'s im2col and `MatMulTransBBias` path (still allocating its output, as today), and give
       `tensor.MatMulTransB` on amd64 a register-blocked AVX2 + FMA kernel in place of one `DotProduct` per output

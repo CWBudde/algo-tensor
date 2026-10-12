@@ -122,6 +122,34 @@ tiles).
   427 µs); with the Go tiles it was not (see Routing below). Under this emulation `Conv2D` runs faster with purego than
   with its AVX2 `Axpy`, one more sign that it does not predict x86.
 
+#### On a real x86: Intel Xeon Gold 5520+
+
+The same test binaries (this PR's head, 87d9a2e), built with Go 1.25.0 on the Xeon that nn measured on, a shared VM with 80
+vCPUs, pinned with `taskset -c 77`, minimum of five runs, 2026-10-12. The VM ran a load average of 130 to 230 during
+the runs, so absolute times are only good to about ±40 % (nn's window took 16.6 ms there the day before and 23.2 ms
+now); the comparisons within one column and the interleaved nn comparison below are the reliable part. All tensor
+and ops tests pass there with `CI=true`, with and without purego and under `-race`, with no AVX2 test skipped; the
+amd64/avx2 golden hashes are the ones Rosetta gave.
+
+| layer                  | `Conv2DPlan` AVX2 | `Conv2DPlan` purego | `Conv2D` AVX2 | `Conv2D` purego |
+| ---------------------- | ----------------: | ------------------: | ------------: | --------------: |
+| conv2d_1               |          12.35 ms |            163.1 ms |      273.6 ms |        292.3 ms |
+| contours-reduced       |           2.74 ms |             6.10 ms |       51.8 ms |         32.9 ms |
+| conv2d_2               |           2.05 ms |             13.5 ms |        9.0 ms |         18.0 ms |
+| conv2d_3               |           2.01 ms |             5.39 ms |       52.2 ms |         32.7 ms |
+| conv2d_4               |           3.94 ms |             51.1 ms |       28.9 ms |         47.5 ms |
+| conv2d_5               |           1.01 ms |             2.88 ms |       24.7 ms |         13.6 ms |
+| **basic-pitch window** |       **24.1 ms** |        **242.0 ms** |  **440.2 ms** |    **437.0 ms** |
+| go-whistle stem        |           9.13 ms |             54.8 ms |       16.0 ms |         39.9 ms |
+| go-whistle stem chunk  |            187 µs |             1039 µs |        301 µs |          920 µs |
+
+- Interleaved with nn @ 58c8332's `BenchmarkConv2DWindow` (AVX2, five alternating rounds on the same CPU), the plan
+  takes 23.8 ms for the six layers against nn's 23.2 ms, 2.4 % longer, as on arm64.
+- `MatMulTransBBias` with AVX2 runs 11–21 × as fast as the Go tiles (m = 8: 1560 against 30689 ns for n 8, k 936;
+  1310 against 27000 ns for n 32, k 200; 63 against 724 ns for n 1, k 200; m 256, n 64, k 576: 0.25 against 4.9 ms).
+- With AVX2 the plan beats the per-pixel `Conv2D` on every layer here, the stem by 1.75 × and its chunk by 1.6 ×. With
+  the 4 × 4 Go tiles it loses on the stem (1.4 ×) and conv2d_4, as under emulation.
+
 ## Conv2D through Conv2DPlan (v0.3.0)
 
 From v0.3.0 on, `Conv2D` runs a groups = 1 convolution through a `Conv2DPlan` built for the call (packed weights, a bias
@@ -197,6 +225,13 @@ path's time on the 24 routed shapes and 0.33–4.09 on the 66 others, 21 of them
 on three: 255 out channels at k = 36 (2.8 and 3.1 ×), which the AVX2 kernels decline (not a multiple of 4) and the 4 × 4
 Go tiles run, and 8 × 8 outputs at k = 9 and 128 out channels (1.06 ×). Routing on amd64 stays off: it needs a real x86
 measurement and is a numerics change of its own (`Conv2D`'s amd64 bits would move).
+
+On the real Xeon Gold 5520+ (setup as in the amd64 section above, three runs, minimum per path) the sweep agrees with
+the emulation. With AVX2 the plan takes 0.15–4.43 of the direct path's time on the 24 routed shapes and 0.34–4.71 on
+the 66 others, 15 of them faster; of the routed shapes it loses only on the two with 255 out channels at k = 36 (4.4
+and 4.1 ×), which the AVX2 kernels decline. With purego's 4 × 4 Go tiles it loses on 15 of the 24 routed shapes (up to
+1.65 ×). Routing on amd64 with AVX2 and out channels of 1 or a multiple of 4 would therefore gain; it stays a numerics
+change for a later item.
 
 ## Optional acceleration points (correctness contract unchanged)
 
