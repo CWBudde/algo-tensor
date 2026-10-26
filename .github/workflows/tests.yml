@@ -1,0 +1,33 @@
+name: tests
+
+# Entry point: each check is a reusable workflow of its own (test-*.yml), so the checks run as separate jobs in
+# parallel and a failing one names what broke. Linux only: macOS minutes bill at 10x.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-format:
+    uses: ./.github/workflows/test-format.yml
+
+  test-lint:
+    uses: ./.github/workflows/test-lint.yml
+
+  test-unit:
+    uses: ./.github/workflows/test-unit.yml
+
+  test-wasm:
+    uses: ./.github/workflows/test-wasm.yml
+
+  test-demo:
+    uses: ./.github/workflows/test-demo.yml
