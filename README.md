@@ -100,8 +100,10 @@ just ci            # check-formatted + test + lint + check-tidy
 just bench         # all benchmarks
 ```
 
-CI runs `just ci`, `just test-purego` and `just build-wasm` on Linux (amd64), and in a second job `just lint-wasm`,
-`just build-demo` and `just lint-web` for the web demo.
+CI (`.github/workflows/tests.yml`) runs the checks of `just ci` as separate parallel jobs on Linux (amd64):
+`test-format` (`just check-formatted`), `test-lint` (`just check-tidy`, `just lint`), `test-unit` (`just test`,
+`just test-purego`), `test-wasm` (`just build-wasm`) and `test-demo` (`just lint-wasm`, `just build-demo`,
+`just lint-web`).
 
 ## Web demo
 

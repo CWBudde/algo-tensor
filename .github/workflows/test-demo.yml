@@ -1,0 +1,45 @@
+name: test-demo
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test-demo:
+    # Lints the js/wasm glue, builds demo.wasm and the Vite app, and lints the front end; pages.yml deploys it.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup just
+        uses: extractions/setup-just@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          install-only: true
+
+      - name: Lint the js/wasm glue
+        run: just lint-wasm
+
+      - name: Build the demo
+        run: just build-demo
+
+      - name: Lint the front end
+        run: just lint-web

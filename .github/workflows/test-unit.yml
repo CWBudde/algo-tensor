@@ -1,0 +1,30 @@
+name: test-unit
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test-unit:
+    # The runner is amd64, so the tests run the AVX2 assembly; the NEON assembly runs locally on Apple silicon and in
+    # the consumers' arm64 test runs.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup just
+        uses: extractions/setup-just@v4
+
+      - name: Tests on the assembly kernels
+        run: just test
+
+      - name: Tests on the pure-Go fallbacks
+        run: just test-purego
