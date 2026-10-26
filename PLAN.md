@@ -324,9 +324,9 @@ provenance.
       2C = 768) plus the time branch's [1, 96, 85995], native and `GOOS=js GOARCH=wasm`; record them in `ops/PERFORMANCE.md`. Update README's operator table and MIGRATION.md.
 - [ ] 3.2 `gelu-glu` — Add exact activations to `tensor`: `GELU(x *Tensor) (*Tensor, error)` and an in-place
       `GELUInPlace([]float32)` computing `0.5·x·(1 + erf(x/√2))` (torch's default `approximate='none'`; go-pocket-tts'
-      private `geluTanh` is the tanh approximation and stays where it is), and `GLU(x *Tensor, dim int)
-    (*Tensor, error)`: split `dim` (size must be even) into halves a and b and return `a · sigmoid(b)`, as
-      `torch.nn.functional.glu`; HTDemucs uses `dim = 1` on channel-first [N, 2C, T] and [B, 2C, F, T]. Evaluate erf
+      private `geluTanh` is the tanh approximation and stays where it is), and
+      `GLU(x *Tensor, dim int) (*Tensor, error)`: split `dim` (size must be even) into halves a and b and return
+      `a · sigmoid(b)`, as `torch.nn.functional.glu`; HTDemucs uses `dim = 1` on channel-first [N, 2C, T] and [B, 2C, F, T]. Evaluate erf
       in float64 (`math.Erf`) per element unless a float32 polynomial reaches ≤ 1 ulp-level agreement with it over
       the whole float32 range and is measurably faster natively and under wasm; either way, document the choice and
       the measured worst error against a float64 reference over a dense sweep of [−10, 10] plus ±Inf, NaN, ±0,
@@ -369,8 +369,8 @@ provenance.
       class and −0 (HTDemucs' 533 weight tensors are stored as F16): test every one of the 65,536 F16 and BF16 bit
       patterns against a reference decoder. Bound header size and tensor byte ranges as the source does (and fuzz
       the header parser: `FuzzOpenStoreFromBytes`), never trust offsets, and reject overlapping or out-of-range
-      entries. Provenance headers as AGENTS.md requires (`From github.com/cwbudde/go-pocket-tts internal/safetensors/…
-    @ 4b72d3a`, then `algo-tensor change:` lines). Tests: the copied tests, the dtype sweep, round trip through the
+      entries. Provenance headers as AGENTS.md requires
+      (`From github.com/cwbudde/go-pocket-tts internal/safetensors/… @ 4b72d3a`, then `algo-tensor change:` lines). Tests: the copied tests, the dtype sweep, round trip through the
       writer, the fuzz target, and `GOOS=js GOARCH=wasm` (the editor's separation worker loads an 84 MB F16 file from
       a byte slice, so `OpenStoreFromBytes` must not copy the data more than once; measure peak memory for an 84 MB
       file in the PR). README, MIGRATION.md (a new section: go-pocket-tts may switch to this package in its own PR,
