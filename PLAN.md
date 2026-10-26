@@ -25,6 +25,10 @@ go-whistle's plan (see AGENTS.md).
 → release v0.5.0 (tagged at b9afdfb, the merge of #15: 2.1 and 2.2 move no bits, a minor version for the speed-up)
 2.3                       (declined by the user's decision on 2026-10-13: about 10–15 % over 2.1's kernel on large
                           products, not worth arm64/sme golden hashes that CI cannot check)
+3.1, 3.2, 3.3, 3.4        (independent; additive: a new golden set `goldenSeparate`, no existing hash changes)
+3.5                       (a decision item, after 3.1–3.3; adds code only if its measurement says so)
+→ release v0.6.0 (minor, additive); consumed by algo-separate (github.com/cwbudde/algo-separate, its PLAN 2.2) and
+  algo-audio-editor Phase 36 (stem separation)
 ```
 
 ## Phase 1: Fast small-channel convolution
@@ -277,3 +281,110 @@ by `FMOPA` outer products). A throwaway spike on 2026-10-12 (Apple M5 Pro, Go 1.
   kernel, so it would gain about 10–15 % on the large products and nothing on the small ones, in exchange for
   arm64/sme golden hashes that depend on the CPU and that CI cannot check (GitHub's macOS runners have no SME).
   Phase 2 ends with 2.2; reopen this if SME machines become a target where that gain matters.
+
+## Phase 3: Layers for HTDemucs
+
+[algo-separate](https://github.com/cwbudde/algo-separate) ports Meta's Demucs v4 `htdemucs` (Hybrid Transformer Demucs,
+demucs 4.0.1, MIT, 41,984,456 parameters stored as F16) to pure Go for algo-audio-editor's stem separation (its Phase
+36). Most of the network runs on kernels this module already has: `ops.Conv1D` with dilation and groups (the DConv
+branches, kernel 3, dilation 1 and 2), `ops.ConvTranspose1D` (the time decoder), `ops.Conv2DPlan` (the decoder's 3×3
+rewrite convolutions), `tensor.Linear` (the transformer's projections and feed-forward, 512 → 2048 → 512),
+`tensor.LayerNorm`, `tensor.Softmax` and `ops.Attention`. Missing are GroupNorm, the exact erf GELU, GLU, a tested
+non-causal cross-attention at the model's sequence lengths, and a public safetensors reader for the weights (today
+private to go-pocket-tts). Per 7.8 s segment the model costs roughly 150 GMAC by our estimate (algo-separate measures
+it in its PLAN 1.3), about 30 of them in attention over 2,688 frequency tokens and 1,344 time tokens, so the attention
+item benchmarks those shapes. Every item adds its cases to a new golden set: `separateGoldenCases()` in new
+`golden_cases_separate_test.go` files (in `tensor` and/or `ops`, whichever package holds the operator) with a
+`goldenSeparate` table in `golden_hashes_test.go`, wired into `TestGoldenHashes` next to `goldenTranscribe` as
+`{"algo-tensor, algo-separate's layers", goldenSeparate, separateGoldenCases()}`, with hashes for every configuration
+the existing sets cover (arm64/neon, amd64/avx2, purego, js/wasm). Existing hashes must not change. New files are
+algo-tensor's own (a header saying so, as `golden_cases_transcribe_test.go`), except 3.4's, which carry go-pocket-tts
+provenance.
+
+- [ ] 3.1 `groupnorm` — Add `GroupNorm(x, weight, bias *Tensor, numGroups int, eps float32) (*Tensor, error)` to
+      `tensor` (next to `LayerNorm` in `nn_ops.go`) with `torch.nn.GroupNorm` semantics: `x` is channel-first
+      [B, C, ...] (rank ≥ 2, any number of trailing spatial dims including none), C must be divisible by `numGroups`,
+      mean and biased variance are taken per batch item and group over (C/numGroups) × all spatial positions, the
+      result is `(x − mean) / sqrt(var + eps)`, then the per-channel affine `weight[c]·y + bias[c]` when weight and
+      bias are non-nil (both or neither; shape [C]). HTDemucs needs `numGroups = 1` on [N, C, T] (the DConv branches'
+      `nn.GroupNorm(1, C)`, C from 6 to 768: [B·F, C, T] in the frequency branch, with frequency folded into N, and
+      [B, C, T] in the time branch) and on [B, C, T] after a transpose for the transformer's `MyGroupNorm(1, 512)`,
+      which normalises over all tokens and channels together (2,688 or 1,344 tokens × 512); test `numGroups` > 1 too (e.g. 4, as torch's default `norm_groups`). Reduce in
+      float64 per group (one pass for the sum and sum of squares is not acceptable for large means; use two passes
+      or Welford) and state the choice in the doc comment; the output is float32. Errors for nil input, rank < 2,
+      C % numGroups ≠ 0, eps ≤ 0 and wrong affine shapes, wrapped like the other `tensor` errors. Split the work over
+      batch × group with `Parallel` only if a benchmark shows a gain, and keep the bits independent of the worker
+      count (`TestParallelPieces` style). Tests: table-driven against a float64 reference (`Abs`/`Rel` ≤ 1e-5 on
+      inputs with |x| ≤ 10 and a mean offset of 1e3, plus a constant group whose variance is 0), the HTDemucs shapes
+      above, a case equal to `LayerNorm` (C = 1 with spatial = last dim after a reshape) to cross-check; add a
+      `"group_norm"` entry to `ops.KernelTolerances` (pinned, `TestKernelTolerancesPinned`) and golden cases at small
+      and HTDemucs shapes. Benchmarks at the layouts the consumer passes: the transformer norm on [1, 512, 2688] and
+      [1, 512, 1344] (after the transpose; not [2688, 512], which torch reads as 2,688 batch items of 512 channels),
+      and the DConv norms on [B·F, C, T] = [512, 96, 336] (first frequency layer, 2C = 96) and [8, 768, 336] (last,
+      2C = 768) plus the time branch's [1, 96, 85995], native and `GOOS=js GOARCH=wasm`; record them in `ops/PERFORMANCE.md`. Update README's operator table and MIGRATION.md.
+- [ ] 3.2 `gelu-glu` — Add exact activations to `tensor`: `GELU(x *Tensor) (*Tensor, error)` and an in-place
+      `GELUInPlace([]float32)` computing `0.5·x·(1 + erf(x/√2))` (torch's default `approximate='none'`; go-pocket-tts'
+      private `geluTanh` is the tanh approximation and stays where it is), and
+      `GLU(x *Tensor, dim int) (*Tensor, error)`: split `dim` (size must be even) into halves a and b and return
+      `a · sigmoid(b)`, as `torch.nn.functional.glu`; HTDemucs uses `dim = 1` on channel-first [N, 2C, T] and [B, 2C, F, T]. Evaluate erf
+      in float64 (`math.Erf`) per element unless a float32 polynomial reaches ≤ 1 ulp-level agreement with it over
+      the whole float32 range and is measurably faster natively and under wasm; either way, document the choice and
+      the measured worst error against a float64 reference over a dense sweep of [−10, 10] plus ±Inf, NaN, ±0,
+      subnormals and |x| > 10. `sigmoid(b)` as `1 / (1 + exp(−b))` in float64 or a stable float32 form, again with the
+      sweep. Both must be deterministic per element (no dependence on vector width or workers) so purego, NEON, AVX2
+      and wasm give the same bits; if that rules out assembly, say so. Errors for nil input, an odd split dim and an
+      out-of-range dim (negative dims count from the end, as in `Softmax`). Tests: the sweeps, GLU on dims 0, 1 and
+      −1 against a reference, aliasing safety of the in-place variant; `"gelu"` and `"glu"` entries in
+      `ops.KernelTolerances`; golden cases. Benchmarks on 336·2048·48 and 2688·2048 elements, native and wasm, in
+      `ops/PERFORMANCE.md`. Update README and MIGRATION.md.
+- [ ] 3.3 `cross-attention` — Verify and test `ops.Attention` without a causal mask for tq ≠ tk at HTDemucs'
+      shapes: the cross-transformer has 5 layers per branch, alternating self-attention (layers 0, 2, 4) and
+      cross-attention (layers 1, 3), dim 512, 8 heads of 64, where the frequency branch's 2,688 tokens (8 bins ×
+      336 frames) attend to the time branch's 1,344 tokens and the time branch attends back, batch 1. Add golden
+      cases for `Attention(q, k, v, false, 0)` on [1, 8, 2688, 64] × [1, 8, 1344, 64] and the reverse (inputs from
+      `goldenRand`, hashed) plus a small tq ≠ tk shape, and a test against a float64 reference at a reduced shape
+      ([1, 2, 37, 16] × [1, 2, 23, 16]) within the pinned `"attention"` tolerance. Then decide whether a helper for
+      torch's `nn.MultiheadAttention` belongs here: HTDemucs stores `in_proj_weight` [3C, C], `in_proj_bias` [3C],
+      `out_proj.weight` [C, C] and `out_proj.bias` [C] (batch_first, no mask, scale 1/√64); the forward is Q = x_q·Wqᵀ,
+      K = x_kv·Wkᵀ, V = x_kv·Wvᵀ (rows 0–C, C–2C, 2C–3C of the packed weight), heads split from the channel dim,
+      attention per head, heads merged, out_proj. If composing `tensor.Linear`, reshapes and `ops.Attention` costs
+      more than 5 % over a fused version at these shapes, or needs copies the caller cannot avoid, add
+      `ops.MultiheadAttention(q, kv, inProjW, inProjB, outProjW, outProjB *tensor.Tensor, heads int)` with a test
+      against the composition and golden cases; otherwise document the composition in an `Example` and add no API.
+      Benchmarks (`ops/PERFORMANCE.md`): self-attention at 2,688 and 1,344 tokens and both cross directions, with
+      and without the projections, native (one worker and the default) and under js/wasm in Node, reported as ms and
+      GMAC/s; the score matrix for 2,688 × 2,688 × 8 heads is 231 MB in float32, so report peak memory too and, if the
+      current implementation materialises it whole, propose (do not make) a blocked variant with its expected saving.
+- [ ] 3.4 `safetensors` — Extract go-pocket-tts' safetensors reader into a public package
+      `github.com/cwbudde/algo-tensor/safetensors` (from github.com/cwbudde/go-pocket-tts `internal/safetensors` at
+      origin/main @ 4b72d3a: `store.go`, `writer.go` and the generic part of `reader.go`, with their tests), keeping
+      the generic API: `Store`, `StoreOptions` (with `KeyMapper` and `RemapMode`), `OpenStore`,
+      `OpenStoreFromBytes`, `Store.Names`, `Has`, `Tensor`, `TensorWithShape`, `ReadAll`, `Close`, the `Tensor`
+      type, `EncodeTensors` and `WriteFile`, dtypes F32, F16, BF16 and I64 decoded to float32 (I64 as today). Leave
+      the voice- and Mimi-specific parts (`VoiceFileKind`, `VoiceModelState`, `LoadFirstTensor*`,
+      `LoadVoiceEmbedding*`, `InspectVoiceFile*`, `LoadVoiceModelState*`, `ValidateModelKeys`,
+      `HasMimiEncoderWeights`, `EncodeVoiceModelState`, `WriteVoiceModelState` and their private helpers) in
+      go-pocket-tts. Keep `safetensors.Tensor` (name, shape, data)
+      as it is, and add a conversion to `*tensor.Tensor` only if it needs no copy (`tensor.FromOwned`). F16 and BF16 to float32 must be exact, including subnormals, ±Inf, NaN payload
+      class and −0 (HTDemucs' 533 weight tensors are stored as F16): test every one of the 65,536 F16 and BF16 bit
+      patterns against a reference decoder. Bound header size and tensor byte ranges as the source does (and fuzz
+      the header parser: `FuzzOpenStoreFromBytes`), never trust offsets, and reject overlapping or out-of-range
+      entries. Provenance headers as AGENTS.md requires
+      (`From github.com/cwbudde/go-pocket-tts internal/safetensors/… @ 4b72d3a`, then `algo-tensor change:` lines). Tests: the copied tests, the dtype sweep, round trip through the
+      writer, the fuzz target, and `GOOS=js GOARCH=wasm` (the editor's separation worker loads an 84 MB F16 file from
+      a byte slice, so `OpenStoreFromBytes` must not copy the data more than once; measure peak memory for an 84 MB
+      file in the PR). README, MIGRATION.md (a new section: go-pocket-tts may switch to this package in its own PR,
+      which is not this repository's work).
+- [ ] 3.5 `conv-freq-fold` — Decision item, after 3.1–3.3. HTDemucs' frequency branch uses `nn.Conv2d` and
+      `nn.ConvTranspose2d` with kernel [8, 1], stride [4, 1] and padding [2, 0] on [B, C, F, T] (T = 336, F = 2048 →
+      512 → 128 → 32 → 8), which equal `ops.Conv1D` / `ops.ConvTranspose1D` along F with T folded into the batch,
+      after a layout change to [B·T, C, F] and back; the DConv branches fold the other way ([B·F, C, T]). Measure the
+      folded paths, including the transposes, native (one worker and the default) and under wasm: at the encoder
+      shapes, folded `Conv1D` against `Conv2DPlan` with a [8, 1] kernel; at the decoder shapes, folded
+      `ConvTranspose1D` against a direct [8, 1] `ConvTranspose2d` over [B, C, F, T] written for the benchmark only
+      (checked against a float64 reference, no public API). `Conv2DPlan` is a forward convolution and cannot
+      reproduce the decoder's stride-4 transposed output, so it is no baseline there. Then decide, and record the
+      decision and numbers here: either nothing is added (algo-separate does the folding itself; document the
+      equivalence in an `Example`), or a layout helper (e.g. `tensor.Permute` for rank-4 channel-first tensors, if
+      `Transpose` is not enough) or a dedicated `[K, 1]` path lands here with golden cases. Prefer the smallest public
+      API that avoids a copy per layer.
