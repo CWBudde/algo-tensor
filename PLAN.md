@@ -307,9 +307,9 @@ provenance.
       mean and biased variance are taken per batch item and group over (C/numGroups) × all spatial positions, the
       result is `(x − mean) / sqrt(var + eps)`, then the per-channel affine `weight[c]·y + bias[c]` when weight and
       bias are non-nil (both or neither; shape [C]). HTDemucs needs `numGroups = 1` on [N, C, T] (the DConv branches'
-      `nn.GroupNorm(1, C)`, C from 6 to 768, with time folded from frequency into N) and on [B, C, T] after a
-      transpose for the transformer's `MyGroupNorm(1, 512)`, which normalises over all tokens and channels together
-      (2,688 or 1,344 tokens × 512); test `numGroups` > 1 too (e.g. 4, as torch's default `norm_groups`). Reduce in
+      `nn.GroupNorm(1, C)`, C from 6 to 768: [B·F, C, T] in the frequency branch, with frequency folded into N, and
+      [B, C, T] in the time branch) and on [B, C, T] after a transpose for the transformer's `MyGroupNorm(1, 512)`,
+      which normalises over all tokens and channels together (2,688 or 1,344 tokens × 512); test `numGroups` > 1 too (e.g. 4, as torch's default `norm_groups`). Reduce in
       float64 per group (one pass for the sum and sum of squares is not acceptable for large means; use two passes
       or Welford) and state the choice in the doc comment; the output is float32. Errors for nil input, rank < 2,
       C % numGroups ≠ 0, eps ≤ 0 and wrong affine shapes, wrapped like the other `tensor` errors. Split the work over
@@ -318,9 +318,10 @@ provenance.
       inputs with |x| ≤ 10 and a mean offset of 1e3, plus a constant group whose variance is 0), the HTDemucs shapes
       above, a case equal to `LayerNorm` (C = 1 with spatial = last dim after a reshape) to cross-check; add a
       `"group_norm"` entry to `ops.KernelTolerances` (pinned, `TestKernelTolerancesPinned`) and golden cases at small
-      and HTDemucs shapes. Benchmarks: [2688, 512] after the transpose, [8·336, 384, 336]-style DConv shapes
-      ([2688, 48, 336] is too big for a benchmark; use [336, 48, 2048] and [336, 768, 8]), native and
-      `GOOS=js GOARCH=wasm`; record them in `ops/PERFORMANCE.md`. Update README's operator table and MIGRATION.md.
+      and HTDemucs shapes. Benchmarks at the layouts the consumer passes: the transformer norm on [1, 512, 2688] and
+      [1, 512, 1344] (after the transpose; not [2688, 512], which torch reads as 2,688 batch items of 512 channels),
+      and the DConv norms on [B·F, C, T] = [512, 96, 336] (first frequency layer, 2C = 96) and [8, 768, 336] (last,
+      2C = 768) plus the time branch's [1, 96, 85995], native and `GOOS=js GOARCH=wasm`; record them in `ops/PERFORMANCE.md`. Update README's operator table and MIGRATION.md.
 - [ ] 3.2 `gelu-glu` — Add exact activations to `tensor`: `GELU(x *Tensor) (*Tensor, error)` and an in-place
       `GELUInPlace([]float32)` computing `0.5·x·(1 + erf(x/√2))` (torch's default `approximate='none'`; go-pocket-tts'
       private `geluTanh` is the tanh approximation and stays where it is), and `GLU(x *Tensor, dim int)
@@ -378,9 +379,12 @@ provenance.
       `nn.ConvTranspose2d` with kernel [8, 1], stride [4, 1] and padding [2, 0] on [B, C, F, T] (T = 336, F = 2048 →
       512 → 128 → 32 → 8), which equal `ops.Conv1D` / `ops.ConvTranspose1D` along F with T folded into the batch,
       after a layout change to [B·T, C, F] and back; the DConv branches fold the other way ([B·F, C, T]). Measure the
-      folded Conv1D path against `Conv2DPlan` with a [8, 1] kernel at the encoder and decoder shapes (native, one
-      worker and the default, and wasm), including the transposes. Then decide, and record the decision and numbers
-      here: either nothing is added (algo-separate does the folding itself; document the equivalence in an `Example`),
-      or a layout helper (e.g. `tensor.Permute` for rank-4 channel-first tensors, if `Transpose` is not enough) or a
-      dedicated `[K, 1]` path lands here with golden cases. Prefer the smallest public API that avoids a copy per
-      layer.
+      folded paths, including the transposes, native (one worker and the default) and under wasm: at the encoder
+      shapes, folded `Conv1D` against `Conv2DPlan` with a [8, 1] kernel; at the decoder shapes, folded
+      `ConvTranspose1D` against a direct [8, 1] `ConvTranspose2d` over [B, C, F, T] written for the benchmark only
+      (checked against a float64 reference, no public API). `Conv2DPlan` is a forward convolution and cannot
+      reproduce the decoder's stride-4 transposed output, so it is no baseline there. Then decide, and record the
+      decision and numbers here: either nothing is added (algo-separate does the folding itself; document the
+      equivalence in an `Example`), or a layout helper (e.g. `tensor.Permute` for rank-4 channel-first tensors, if
+      `Transpose` is not enough) or a dedicated `[K, 1]` path lands here with golden cases. Prefer the smallest public
+      API that avoids a copy per layer.
